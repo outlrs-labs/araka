@@ -1,0 +1,25 @@
+# systemd unit for running FollowUp Bot on a plain VM (e.g. Oracle Always Free).
+#   sudo cp setup/followup-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now followup-bot
+#   sudo systemctl status followup-bot      # check it's running
+#   journalctl -u followup-bot -f           # tail logs
+#
+# Assumes: app at /home/ubuntu/followup-bot, venv created there, .env present.
+[Unit]
+Description=FollowUp Bot (WhatsApp scheduling assistant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/followup-bot
+Environment=PYTHONUNBUFFERED=1
+# Single worker — the in-process scheduler must not be duplicated.
+ExecStart=/home/ubuntu/followup-bot/venv/bin/gunicorn -w 1 --threads 8 --timeout 120 -b 0.0.0.0:5000 wsgi:application
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
