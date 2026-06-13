@@ -24,11 +24,33 @@ class Config:
     WA_MEETING_TEMPLATE_NAME: str = os.getenv("WA_MEETING_TEMPLATE_NAME", "gmeet_confirmation")
     WA_MEETING_TEMPLATE_LANGUAGE: str = os.getenv("WA_MEETING_TEMPLATE_LANGUAGE", "en_US")
 
+    # Published WhatsApp Flow used to collect meeting details when the
+    # attendee email is missing. Empty = legacy text prompts.
+    WA_GMEET_FLOW_ID: str = os.getenv("WA_GMEET_FLOW_ID", "")
+    # Dynamic (endpoint-backed) Flow: live availability + server INIT prefill.
+    # Requires FLOW_PRIVATE_KEY_PATH + the public key uploaded to Meta.
+    WA_GMEET_FLOW_DYNAMIC: bool = os.getenv("WA_GMEET_FLOW_DYNAMIC", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # RSA private key (PEM) for decrypting Flow data-exchange requests.
+    FLOW_PRIVATE_KEY_PATH: str = os.getenv("FLOW_PRIVATE_KEY_PATH", "flow_private.pem")
+    FLOW_KEY_PASSPHRASE: str = os.getenv("FLOW_KEY_PASSPHRASE", "")
+    # Send the Flow in DRAFT mode — works for WABA testers before the Flow is
+    # published. Set false once the Flow is published (needs business verification).
+    WA_FLOW_DRAFT_MODE: bool = os.getenv("WA_FLOW_DRAFT_MODE", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+
     # ── Flask server ──────────────────────────────────────────
     FLASK_PORT: int = int(os.getenv("FLASK_PORT", "5000"))
     FLASK_SECRET: str = os.getenv("FLASK_SECRET", "change_me_in_production")
 
-    # ── Groq AI ──────────────────────────────────────────────
+    # ── Sarvam AI (chat / agent brain — OpenAI-compatible) ───
+    SARVAM_API_KEY: str = os.getenv("SARVAM_API_KEY", "")
+    SARVAM_MODEL: str = os.getenv("SARVAM_MODEL", "sarvam-105b")
+    SARVAM_BASE_URL: str = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai/v1")
+
+    # ── Groq (voice transcription only — Whisper) ────────────
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
@@ -40,6 +62,7 @@ class Config:
         "https://www.googleapis.com/auth/calendar",
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
     ]
 
     # ── Database ─────────────────────────────────────────────
@@ -58,6 +81,7 @@ class Config:
         "your_groq_api_key", "your_long_lived_access_token",
         "your_phone_number_id", "generate_a_random_32_byte_token",
         "generate_a_random_secret", "your_meta_app_secret",
+        "your_sarvam_api_key",
     }
 
     @classmethod
@@ -76,11 +100,13 @@ class Config:
             errors.append("WA_VERIFY_TOKEN is missing")
         if cls.REQUIRE_WA_SIGNATURE and not cls.WA_APP_SECRET:
             errors.append("WA_APP_SECRET is required when REQUIRE_WA_SIGNATURE=true")
-        if cls._is_placeholder(cls.GROQ_API_KEY):
+        if cls._is_placeholder(cls.SARVAM_API_KEY):
             errors.append(
-                "GROQ_API_KEY is missing or still set to placeholder — "
-                "get a real key from https://console.groq.com/keys"
+                "SARVAM_API_KEY is missing or still set to placeholder — "
+                "get a key from https://dashboard.sarvam.ai"
             )
+        # GROQ is used ONLY for voice transcription now — optional. Voice notes
+        # degrade gracefully when it's absent, so it's not a hard requirement.
         return errors
 
 

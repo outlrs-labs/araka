@@ -107,6 +107,33 @@ async def delete_event(user_db, event_id: str):
     return True
 
 
+async def day_busy(user_db, day_local: datetime) -> list:
+    """Return [(start, end)] busy intervals for the local calendar day."""
+    svc = _get_service(user_db)
+    if not svc:
+        raise Exception("Google not connected")
+    import pytz
+    tz = pytz.timezone(config.BOT_TIMEZONE)
+    start = day_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if start.tzinfo is None:
+        start = tz.localize(start)
+    end = start + timedelta(days=1)
+    res = svc.events().list(
+        calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
+        singleEvents=True, orderBy="startTime",
+    ).execute()
+    busy = []
+    for ev in res.get("items", []):
+        es = ev.get("start", {}).get("dateTime", "")
+        ee = ev.get("end", {}).get("dateTime", "")
+        if es and ee:
+            try:
+                busy.append((datetime.fromisoformat(es), datetime.fromisoformat(ee)))
+            except (ValueError, TypeError):
+                continue
+    return busy
+
+
 async def update_event(
     user_db, event_id: str,
     title: str = None, start_iso: str = None, duration_minutes: int = None,

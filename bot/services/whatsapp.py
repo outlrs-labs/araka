@@ -101,6 +101,43 @@ def send_list(wa_id: str, body_text: str, button_label: str, sections: list) -> 
     return _post(payload)
 
 
+def send_flow(wa_id: str, body_text: str, flow_id: str, screen: str,
+              data: dict, cta: str = "Open", flow_token: str = "",
+              flow_action: str = "navigate") -> bool:
+    """Send an interactive WhatsApp Flow message (published Flow).
+
+    flow_action="navigate" (static Flow): `data` prefills the first screen,
+    so it must contain a value for EVERY key the screen declares.
+    flow_action="data_exchange" (endpoint Flow): the endpoint's INIT supplies
+    the first screen + data, so no payload is sent here.
+    """
+    import uuid
+    params = {
+        "flow_message_version": "3",
+        "flow_id": flow_id,
+        "flow_token": flow_token or f"{wa_id}:{uuid.uuid4().hex[:12]}",
+        "flow_cta": cta[:20],
+        "flow_action": flow_action,
+    }
+    # Draft Flows can be sent to WABA testers before publishing.
+    if config.WA_FLOW_DRAFT_MODE:
+        params["mode"] = "draft"
+    if flow_action == "navigate":
+        params["flow_action_payload"] = {"screen": screen, "data": data}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": wa_id,
+        "type": "interactive",
+        "interactive": {
+            "type": "flow",
+            "body": {"text": body_text[:1024]},
+            "action": {"name": "flow", "parameters": params},
+        },
+    }
+    return _post(payload)
+
+
 def mark_read(wa_id: str, message_id: str) -> None:
     """Mark an incoming message as read (shows blue ticks)."""
     payload = {

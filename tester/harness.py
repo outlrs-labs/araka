@@ -146,6 +146,11 @@ def install_mocks(sim: Simulator):
     def cap_markread(*a, **k):
         return None
 
+    def cap_flow(wa_id, body_text, flow_id, screen, data, cta="Open",
+                 flow_token=""):
+        sim.record(wa_id, "flow", body=body_text, flow_id=flow_id,
+                   screen=screen, data=data); return True
+
     # Source module
     wa.send_message = cap_text
     wa.send_buttons = cap_buttons
@@ -153,6 +158,7 @@ def install_mocks(sim: Simulator):
     wa.send_template = cap_template
     wa.send_meeting_notification = cap_notif
     wa.mark_read = cap_markread
+    wa.send_flow = cap_flow
 
     # Modules that did `from whatsapp import ...` (bound copies)
     for mod in (main, cb, ga, ob):

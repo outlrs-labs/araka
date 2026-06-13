@@ -1,0 +1,121 @@
+{
+    "version": "7.3",
+    "screens": [
+        {
+            "id": "SCHEDULE",
+            "title": "New meeting",
+            "terminal": true,
+            "data": {
+                "topic_init": {
+                    "type": "string",
+                    "__example__": "Project sync"
+                },
+                "name_init": {
+                    "type": "string",
+                    "__example__": "Harsh"
+                },
+                "email_init": {
+                    "type": "string",
+                    "__example__": "harsh@example.com"
+                },
+                "min_date": {
+                    "type": "string",
+                    "__example__": "1749686400000"
+                },
+                "date_init": {
+                    "type": "string",
+                    "__example__": "1749772800000"
+                },
+                "time_init": {
+                    "type": "string",
+                    "__example__": "11:00"
+                }
+            },
+            "layout": {
+                "type": "SingleColumnLayout",
+                "children": [
+                    {
+                        "type": "Form",
+                        "name": "schedule_form",
+                        "init-values": {
+                            "topic": "${data.topic_init}",
+                            "name": "${data.name_init}",
+                            "email": "${data.email_init}",
+                            "date": "${data.date_init}",
+                            "time": "${data.time_init}"
+                        },
+                        "children": [
+                            {
+                                "type": "TextInput",
+                                "label": "Topic",
+                                "name": "topic",
+                                "input-type": "text",
+                                "required": true
+                            },
+                            {
+                                "type": "TextInput",
+                                "label": "Name",
+                                "name": "name",
+                                "input-type": "text",
+                                "required": true
+                            },
+                            {
+                                "type": "TextInput",
+                                "label": "Email",
+                                "name": "email",
+                                "input-type": "email",
+                                "required": true
+                            },
+                            {
+                                "type": "DatePicker",
+                                "label": "Date",
+                                "name": "date",
+                                "min-date": "${data.min_date}",
+                                "required": true
+                            },
+                            {
+                                "type": "Dropdown",
+                                "label": "Time",
+                                "name": "time",
+                                "required": true,
+                                "data-source": [
+                                    { "id": "04:00", "title": "4:00 AM" },
+                                    { "id": "04:30", "title": "4:30 AM" },
+                                    { "id": "05:00", "title": "5:00 AM" },
+                                    { "id": "05:30", "title": "5:30 AM" },
+                                    { "id": "06:00", "title": "6:00 AM" },
+                                    { "id": "06:30", "title": "6:30 AM" },
+                                    { "id": "07:00", "title": "7:00 AM" },
+                                    { "id": "07:30", "title": "7:30 AM" },
+                                    { "id": "08:00", "title": "8:00 AM" },
+                                    { "id": "08:30", "title": "8:30 AM" },
+                                    { "id": "09:00", "title": "9:00 AM" },
+                                    { "id": "09:30", "title": "9:30 AM" },
+                                    { "id": "10:00", "title": "10:00 AM" },
+                                    { "id": "10:30", "title": "10:30 AM" },
+                                    { "id": "11:00", "title": "11:00 AM" },
+                                    { "id": "11:30", "title": "11:30 AM" },
+                                    { "id": "12:00", "title": "12:00 PM" }
+                                ]
+                            },
+                            {
+                                "type": "Footer",
+                                "label": "Schedule Google Meet",
+                                "on-click-action": {
+                                    "name": "complete",
+                                    "payload": {
+                                        "topic": "${form.topic}",
+                                        "name": "${form.name}",
+                                        "email": "${form.email}",
+                                        "date": "${form.date}",
+                                        "time": "${form.time}"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}

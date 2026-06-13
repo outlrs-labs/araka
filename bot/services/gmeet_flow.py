@@ -203,7 +203,7 @@ async def propose_meeting(
             "action": "missing_time",
             "name":  name, "email": email, "phone": phone,
             "duration_minutes": duration_minutes,
-            "message": "When should I schedule this meeting? Please share the date and time.",
+            "message": "when should this meeting be? send the date and time.",
         }
 
     try:
@@ -213,7 +213,7 @@ async def propose_meeting(
             "action": "missing_time",
             "name":  name, "email": email, "phone": phone,
             "duration_minutes": duration_minutes,
-            "message": "I have the person, but not a valid meeting time. Please share the date and time.",
+            "message": "i have the person, but not a valid meeting time. send the date and time.",
         }
 
     conflicts: list = []
@@ -278,9 +278,9 @@ async def propose_meeting(
                 for c in conflicts
             ],
             "message": (
-                f"⚠️ Conflict at {dt.strftime('%b %d, %I:%M %p')}: "
-                f"You already have {'; '.join(lines)}. "
-                f"Pick a different time or keep both?"
+                f"conflict at {dt.strftime('%b %d, %I:%M %p')}: "
+                f"you already have {'; '.join(lines)}. "
+                f"pick a different time or keep both?"
             ),
         }
 
@@ -299,9 +299,9 @@ async def propose_meeting(
         "start_time": dt.strftime("%a %b %d, %I:%M %p IST"),
         "end_time":   end_dt.strftime("%I:%M %p IST"),
         "message": (
-            f"Confirm — {event_title}, "
-            f"{dt.strftime('%a %b %d, %-I:%M %p')} IST, Google Meet. "
-            f"Reminders at 24h and 1h before. Save?"
+            f"confirm — {event_title}, "
+            f"{dt.strftime('%a %b %d, %-I:%M %p')} IST, google meet. "
+            f"reminders at 24h and 1h before. save?"
         ),
     }
 
@@ -322,7 +322,7 @@ async def create_event_and_notify(
 ) -> dict:
     """Create the Google Calendar event with a Meet link.
 
-    Called only after the user taps "✅ Yes, save". Optionally notifies
+    Called only after the user taps "Confirm". Optionally notifies
     the assignee via WhatsApp template if their phone is on file.
     """
     try:
@@ -409,17 +409,17 @@ async def create_event_and_notify(
             logger.warning(f"Attendee notification failed: {e}")
 
     if notified:
-        suffix = f"\n\n📲 {name} has been notified on WhatsApp."
+        suffix = f"\n\n{name} has been notified on whatsapp."
     elif e164 and not reachable:
-        suffix = f"\n\n🔕 {name} has opted out, so I didn't message them."
+        suffix = f"\n\n{name} has opted out, so i didn't message them."
     elif phone and not e164:
         suffix = (
-            f"\n\n⚠️ {name}'s phone number isn't a valid format, "
-            f"so I couldn't notify them on WhatsApp."
+            f"\n\n{name}'s phone number isn't a valid format, "
+            f"so i couldn't notify them on whatsapp."
         )
     elif e164:
         suffix = (
-            f"\n\n⚠️ Could not notify {name} on WhatsApp "
+            f"\n\ncouldn't notify {name} on whatsapp "
             f"(their number may not be in the bot's test list)."
         )
     else:
@@ -438,10 +438,10 @@ async def create_event_and_notify(
         "calendar_link": info.get("link", ""),
         "event_id":      info.get("id", ""),
         "message": (
-            f"✅ Saved. {event_title}.\n"
-            f"🕐 {time_str}\n"
-            f"🔗 Meet: {meet_link or 'N/A'}"
-            f"\n⏰ Reminders set for 24h & 1h before."
+            f"saved. {event_title}.\n"
+            f"{time_str}\n"
+            f"meet: {meet_link or 'N/A'}"
+            f"\nreminders set for 24h and 1h before."
             f"{suffix}"
         ),
         "attendee_notified": notified,

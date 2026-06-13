@@ -18,8 +18,8 @@ from bot.config import config
 from bot.database import async_session, ChatMemory, User
 from bot.tools import (
     save_note, get_notes, delete_note,
-    calendar_create, calendar_get_all,
-    set_gmeet, contacts_search,
+    calendar_create, calendar_get_all, calendar_cancel,
+    set_gmeet, contacts_search, gmail_search,
     set_reminder, list_reminders, delete_reminder,
     add_todo, get_todos, complete_todo, delete_todo,
 )
@@ -28,8 +28,8 @@ from bot.utils.time import IST, utcnow_naive, now_prompt_str  # noqa: F401  (IST
 logger = logging.getLogger(__name__)
 
 # ── Groq client (OpenAI-compatible) ──
-client = OpenAI(base_url=config.GROQ_BASE_URL, api_key=config.GROQ_API_KEY)
-MODEL = config.GROQ_MODEL
+client = OpenAI(base_url=config.SARVAM_BASE_URL, api_key=config.SARVAM_API_KEY)
+MODEL = config.SARVAM_MODEL
 
 MEMORY_WINDOW = 20
 
@@ -39,9 +39,15 @@ MEMORY_WINDOW = 20
 # ═══════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT = """\
-You are **FollowUp Bot**, a WhatsApp assistant that helps people schedule \
+You are **araka**, a WhatsApp assistant that helps people schedule \
 meetings and keep their commitments. You are precise, brief, and you \
 NEVER invent facts.
+
+### Personality
+You text like a sharp, slightly dry friend: lowercase, casual, minimal. \
+Short sentences. No corporate filler, no exclamation spam, and **never \
+any emojis**. Competence first, charm second — when it's about times, \
+dates, names or links, be exact and plain.
 
 ### Who you're talking to
 - Name: {user_name}
@@ -53,24 +59,26 @@ NEVER invent facts.
 - `set_gmeet` — SCHEDULE a meeting WITH another person (creates a Google Meet)
 - `contacts_search` — LOOK UP a saved person's email/phone. Use when the
   user asks "what's X's number/email/contact" — this is NOT scheduling.
-- `calendar_create` / `calendar_get_all` — the user's OWN events
+- `calendar_create` / `calendar_get_all` / `calendar_cancel` — the user's OWN events
+- `gmail_search` — search/read the user's Gmail for email questions
 - `save_note` / `get_notes` / `delete_note` — quick notes
 - `set_reminder` / `list_reminders` / `delete_reminder` — reminders
 - `add_todo` / `get_todos` / `complete_todo` / `delete_todo` — to-do list
 
-### 🚫 The five rules you must never break
+### The five rules you must never break
 1. **Never invent a clock time.** If the user did not TYPE a time \
 ("6 PM", "18:30", "noon"), leave `start_time_iso` EMPTY in `set_gmeet`. \
 "today" / "tomorrow" / "Friday" with no clock time = time still MISSING; \
 the server will ask. (The server rejects any time you invent.)
 2. **Never claim success early.** Do NOT say a meeting is "scheduled", \
 "booked", or "done" unless a TOOL RESULT said so. Events are created only \
-after the user taps ✅ Yes. Announcing success before that is a lie.
+after the user taps Confirm. Announcing success before that is a lie.
 3. **Never invent a `title`.** Leave it empty unless the user stated a \
 topic (e.g. "quick chat about Q4" → title="Q4"). Do NOT put the person's \
 name in `title` — the server builds the final title.
 4. **Never fabricate stored data.** Before answering about notes, \
-reminders, to-dos, or calendar, CALL the matching get_/list_ tool first \
+reminders, to-dos, calendar, or Gmail, CALL the matching get_/list_/search \
+tool first \
 and answer only from its result. Never say "you have no reminders" or \
 "you deleted that" without checking.
 5. **Call `set_gmeet` at most once** per user request.
@@ -86,8 +94,27 @@ offset. Default meeting duration is **30 minutes**.
 basically over: the server resolves the contact, checks conflicts, and \
 shows a confirmation card. Relay the server's message — don't pre-empt it.
 - Just the user, no attendee → `calendar_create`.
+- To cancel/delete a meeting or event → call `calendar_cancel`. Put the \
+person/title in `query`; pass `start_time_iso` only if the user typed a clear \
+date/time. For "cancel everything / all my meetings / both" pass \
+`cancel_all=true` (keep the word "today" in `query` to limit it to today). \
+Relay the tool's result verbatim-ish: if it returns `CHOOSE_EVENT` or \
+`MULTIPLE_CALENDAR_MATCHES`, show that list and ask which; only say an event \
+is cancelled when it returns `CALENDAR_EVENT(S)_CANCELLED`. Never invent a \
+"type the exact title and time" instruction or an "all" option the tool \
+didn't offer.
+- To MOVE/reschedule an existing meeting (e.g. "change it to 10pm", "push to \
+Friday") do NOT create a second meeting: first `calendar_cancel` the old one, \
+then `set_gmeet` at the new time with the same person.
 - If the user writes `Name{{email@example.com}}`, pass `attendee_name` \
 AND `attendee_email`.
+
+### Gmail
+- For "latest emails", search with an empty query.
+- For "email from X" or "about Y", use Gmail search syntax when useful \
+(`from:`, `subject:`, keywords).
+- Use `include_body=true` only when the user asks what an email says, wants \
+a summary, or asks a question that cannot be answered from snippets.
 
 ### To-do vs Notes
 - Actionable lists ("my tasks", "add to my list") → `add_todo` / `get_todos`.
@@ -101,9 +128,9 @@ user explicitly asked you to confirm one.
 - Do not echo internal IDs or raw JSON.
 
 ### Style
-- Short, warm, WhatsApp-native. Dates like "Mon May 3, 9:00 AM".
-- Emojis sparingly: 📅 ✅ 🔗 ⏰.
-- If a tool returns "GOOGLE_NOT_CONNECTED" → end your reply with \
+- Short, lowercase, WhatsApp-native. Dates like "Mon May 3, 9:00 AM".
+- Never use emojis. Plain text only.
+- If a tool returns "GOOGLE_NOT_CONNECTED" or "GMAIL_SCOPE_MISSING" → end your reply with \
 SHOW_CONNECT_BUTTON.
 
 ### Boundaries
@@ -147,11 +174,30 @@ TOOLS = [
         }, "required": []},
     }},
     {"type": "function", "function": {
+        "name": "calendar_cancel",
+        "description": "Cancel/delete upcoming Google Calendar event(s) and remove them from the calendar. A clear single match is deleted; a vague request lists events to choose from; cancel_all deletes everything (or just today's). Use for 'cancel my 4pm meeting', 'delete the Priya event', 'cancel all my meetings today'.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Title, attendee, topic, or keywords. Include the word 'today' to scope cancel_all to today."},
+            "start_time_iso": {"type": "string", "description": "ISO datetime only if the user explicitly gave a clear date/time."},
+            "cancel_all": {"type": "string", "description": "Set 'true' to cancel ALL upcoming events (or just today's if query says 'today')."},
+            "limit": {"type": "string", "description": "Max upcoming events to inspect (default 50)."},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
         "name": "contacts_search",
         "description": "Look up a saved person's contact details (email, phone) from the user's Google Contacts. Use this when the user ASKS ABOUT a contact, e.g. 'what is Akshay's email/number/contact'. Do NOT use it to schedule — that's set_gmeet.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Name to look up"},
         }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "gmail_search",
+        "description": "Search or read the user's Gmail. Use this before answering any question about emails, inbox, senders, subjects, or email contents.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Gmail search query. Empty means latest emails. Examples: 'from:priya', 'subject:invoice', 'newer_than:7d project'."},
+            "limit": {"type": "string", "description": "Max messages to return (default 5, max 10)."},
+            "include_body": {"type": "string", "description": "'true' when the user asks what an email says, wants a summary, or asks about body content."},
+        }, "required": []},
     }},
     {"type": "function", "function": {
         "name": "save_note",
@@ -236,8 +282,10 @@ TOOLS = [
 
 TOOL_MAP = {
     "calendar_create": calendar_create, "calendar_get_all": calendar_get_all,
+    "calendar_cancel": calendar_cancel,
     "save_note": save_note, "get_notes": get_notes, "delete_note": delete_note,
     "set_gmeet": set_gmeet, "contacts_search": contacts_search,
+    "gmail_search": gmail_search,
     "set_reminder": set_reminder,
     "list_reminders": list_reminders, "delete_reminder": delete_reminder,
     "add_todo": add_todo, "get_todos": get_todos,
@@ -245,7 +293,7 @@ TOOL_MAP = {
 }
 
 _INT_FIELDS = {"duration_minutes", "limit", "note_id", "task_id", "reminder_id", "new_duration_minutes", "relative_minutes", "item_number"}
-_BOOL_FIELDS = {"with_meet", "is_recurring", "done"}
+_BOOL_FIELDS = {"with_meet", "is_recurring", "done", "include_body", "cancel_all"}
 
 # Per-request user text (set at the top of process_message). Used by
 # _execute_tool to inject user_text into set_gmeet so the anti-
@@ -296,6 +344,13 @@ async def _execute_tool(wa_id: str, name: str, args: dict) -> str:
         # Force-clear `_confirmed` — only the deterministic callback
         # handler is allowed to set it. If the LLM ever tries, drop it.
         args.pop("_confirmed", None)
+
+        # Drop junk args some models emit (empty key, hallucinated params).
+        # Keep only the tool's real parameters so a bad arg can't crash it.
+        import inspect
+        valid = set(inspect.signature(fn).parameters) - {"wa_id"}
+        args = {k: v for k, v in args.items()
+                if isinstance(k, str) and k in valid}
 
         result = await fn(wa_id, **args)
 
@@ -461,7 +516,7 @@ async def process_message(wa_id: str, text: str) -> str:
             response = _call_groq(system_msg, messages)
 
         # 5. Extract final response
-        final = response.choices[0].message.content or "Done! ✅"
+        final = response.choices[0].message.content or "done."
 
         # 6. Save to memory (trim to reduce storage)
         final_trimmed = final[:800] if len(final) > 800 else final
@@ -475,14 +530,14 @@ async def process_message(wa_id: str, text: str) -> str:
         logger.error(f"Agent error: {e}\n{traceback.format_exc()}")
         error_str = str(e).lower()
         if "rate_limit" in error_str or "429" in error_str:
-            return "⏳ I'm being rate-limited right now. Please try again in a minute."
+            return "i'm being rate-limited right now. try again in a minute."
         if "model output" in error_str and "empty" in error_str:
-            return "🔄 The AI returned an empty response. Please rephrase and try again."
+            return "that came back empty. rephrase and try again?"
         if "invalid_api_key" in error_str or ("401" in error_str and "api key" in error_str):
-            return "⚙️ The bot isn't fully configured yet. Ask the admin to check the GROQ_API_KEY in .env."
+            return "i'm not fully configured yet. ask the admin to check the SARVAM_API_KEY in .env."
         if "connection" in error_str or "timeout" in error_str:
-            return "📡 Having trouble reaching the AI right now. Please try again in a moment."
-        return "Sorry, I ran into an issue. Please try again in a moment."
+            return "having trouble reaching the AI right now. try again in a moment."
+        return "sorry, i ran into an issue. try again in a moment."
 
 
 def _call_groq(system_msg: dict, messages: list, max_retries: int = 3):

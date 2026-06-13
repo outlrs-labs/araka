@@ -16,7 +16,7 @@ import threading
 from datetime import timedelta
 from html import escape as html_escape
 
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify, redirect, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_result
@@ -41,6 +41,7 @@ from bot.handlers.callback_handler import (
     send_gmeet_email_request, send_gmeet_time_request,
     send_gmeet_conflict_buttons, send_gmeet_confirm_buttons,
     handle_gmeet_text_reply,
+    send_gmeet_flow, handle_gmeet_flow_completion,
 )
 from bot.services.task_service import (
     check_draft_timeouts,
@@ -179,6 +180,27 @@ def auth_callback():
         logger.error(f"Auth callback error: {e}", exc_info=True)
         return _render_page("oauth_error.html", status=500, ERROR=str(e))
 
+@app.route("/flow", methods=["POST"])
+def flow_data_exchange():
+    """Encrypted WhatsApp Flow data-exchange endpoint (dynamic meeting form)."""
+    from bot.services import flow_endpoint
+    body = request.get_json(silent=True) or {}
+    if not all(k in body for k in ("encrypted_flow_data", "encrypted_aes_key", "initial_vector")):
+        return "Bad Request", 400
+    try:
+        decrypted, aes_key, iv = flow_endpoint.decrypt_request(body)
+    except Exception as e:
+        logger.warning(f"Flow endpoint decrypt failed: {e}")
+        return "", 421   # Meta retries / surfaces a refresh-key error
+    try:
+        resp = run_async(flow_endpoint.build_screen_response(decrypted))
+        encrypted = flow_endpoint.encrypt_response(resp, aes_key, iv)
+        return Response(encrypted, mimetype="text/plain")
+    except Exception as e:
+        logger.error(f"Flow endpoint error: {e}", exc_info=True)
+        return "", 500
+
+
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     """Handle incoming WhatsApp messages."""
@@ -261,8 +283,8 @@ async def _process_update(wa_id: str, msg: dict):
             await start_onboarding(wa_id)
             return
         if not user.onboarding_complete:
-            send_message(wa_id, "Let's finish the quick setup above first 🙂 "
-                                "Tap a button or type your name.")
+            send_message(wa_id, "let's finish the quick setup above first — "
+                                "tap a button or type your name.")
             return
         audio_id = msg.get("audio", {}).get("id")
         if audio_id:
@@ -281,7 +303,13 @@ async def _process_update(wa_id: str, msg: dict):
         elif int_type == "list_reply":
             reply_id = interactive.get("list_reply", {}).get("id")
             reply_title = interactive.get("list_reply", {}).get("title")
-            
+        elif int_type == "nfm_reply":
+            # WhatsApp Flow form submission (native meeting form).
+            response_json = interactive.get("nfm_reply", {}).get("response_json", "")
+            if response_json:
+                await handle_gmeet_flow_completion(wa_id, response_json)
+            return
+
         if reply_id:
             await handle_interactive_reply(wa_id, reply_id, reply_title)
 
@@ -336,8 +364,8 @@ async def _maybe_handle_optout(wa_id: str, text: str) -> bool:
 
     send_message(
         wa_id,
-        "🔕 Done — you won't get any more meeting reminders from me. "
-        "Reply *START* anytime to turn them back on.",
+        "done — you won't get any more meeting reminders from me. "
+        "reply *START* anytime to turn them back on.",
     )
     logger.info(f"User {wa_id} opted out (consent=OPT_OUT)")
     return True
@@ -360,7 +388,7 @@ async def _maybe_handle_optin(wa_id: str, text: str) -> bool:
             .values(assignee_unreachable=False)
         )
         await session.commit()
-    send_message(wa_id, "🔔 Reminders are back on. Welcome back!")
+    send_message(wa_id, "reminders are back on. welcome back.")
     return True
 
 
@@ -392,8 +420,8 @@ async def _maybe_handle_data_deletion(wa_id: str, text: str) -> bool:
 
     send_message(
         wa_id,
-        "🗑️ Done — I've deleted your data (meetings, reminders, notes and "
-        "your Google link). Message me again any time to start fresh.",
+        "done — i've deleted your data (meetings, reminders, notes and "
+        "your google link). message me again any time to start fresh.",
     )
     logger.info(f"Data deletion completed for {wa_id}")
     return True
@@ -412,7 +440,7 @@ async def _handle_text(wa_id: str, text: str):
         return
     if text_lower == "cancel":
         await clear_conversation_state(wa_id)
-        send_message(wa_id, "Current operation cancelled.")
+        send_message(wa_id, "cancelled.")
         return
         
     # Check for OAuth redirect URL paste
@@ -424,10 +452,6 @@ async def _handle_text(wa_id: str, text: str):
     if await handle_gmeet_text_reply(wa_id, text, flow_state, flow_ctx):
         return
 
-    # Send typing indicator equivalent (WhatsApp doesn't have a direct API for this, 
-    # but we could send a "⏳ Thinking..." message if we wanted, though it clutters the chat.
-    # We will just process directly.)
-    
     # Send to AI Agent
     try:
         response_text = await process_message(wa_id, text)
@@ -453,7 +477,13 @@ async def _handle_text(wa_id: str, text: str):
                 await send_gmeet_contact_picker(wa_id, gmeet_data)
                 return
             elif action in ("need_email", "no_contact"):
-                await send_gmeet_email_request(wa_id, gmeet_data)
+                # Attendee email missing → native form, prefilled with
+                # everything already known. Full-info requests never get
+                # here — they keep the classic conflict-check + confirm.
+                if config.WA_GMEET_FLOW_ID:
+                    await send_gmeet_flow(wa_id, gmeet_data)
+                else:
+                    await send_gmeet_email_request(wa_id, gmeet_data)
                 return
             elif action == "missing_time":
                 await send_gmeet_time_request(wa_id, gmeet_data)
@@ -468,32 +498,28 @@ async def _handle_text(wa_id: str, text: str):
             if connected:
                 send_message(
                     wa_id,
-                    "✅ Your Google account is connected! "
-                    "Try asking again — I'll access your calendar now.",
+                    "your google account is connected. "
+                    "try asking again — i'll access your calendar now.",
                 )
             else:
                 text_clean = response_text.replace("SHOW_CONNECT_BUTTON", "").strip()
-                send_connect_button(wa_id, text_clean or "🔗 Connect your Google account to get started.")
+                send_connect_button(wa_id, text_clean or "connect your google account to get started.")
             return
             
         send_message(wa_id, response_text)
         
     except Exception as e:
         logger.error(f"Agent processing error: {e}", exc_info=True)
-        send_message(wa_id, "Sorry, I ran into an issue processing that.")
+        send_message(wa_id, "sorry, i ran into an issue processing that.")
 
 async def _handle_audio(wa_id: str, audio_id: str):
     """Download audio, transcribe, and process as text."""
-    # Acknowledge receipt
-    send_message(wa_id, "🎧 _Transcribing your voice note..._")
-    
     transcript = await transcribe_voice(audio_id)
-    
+
     if not transcript:
-        send_message(wa_id, "❌ Sorry, I couldn't understand that audio.")
+        send_message(wa_id, "sorry, i couldn't understand that audio.")
         return
-        
-    send_message(wa_id, f"📝 _\"{transcript}\"_")
+
     await _handle_text(wa_id, transcript)
 
 # ═══════════════════════════════════════════════════════════════
@@ -601,9 +627,9 @@ def _dispatch_task_reminder(t, label: str, num: int) -> None:
     run_async(mark_reminder_sent(t.id, num))
 
     # Creator — free-form (they're an active user, inside the 24h window).
-    msg = f"🔔 Reminder: '{t.title}' {label}."
+    msg = f"reminder: '{t.title}' {label}."
     if t.mode == "online" and t.meeting_link:
-        msg += f"\n🔗 Link: {t.meeting_link}"
+        msg += f"\nlink: {t.meeting_link}"
     ok = send_message_retry(t.wa_id, msg)
     logger.info(f"Creator reminder #{num} for task #{t.id} → sent={ok}")
 

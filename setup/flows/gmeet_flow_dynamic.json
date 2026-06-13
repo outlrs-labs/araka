@@ -1,0 +1,134 @@
+{
+    "version": "7.3",
+    "data_api_version": "3.0",
+    "routing_model": {
+        "SCHEDULE": ["SUMMARY"],
+        "SUMMARY": []
+    },
+    "screens": [
+        {
+            "id": "SCHEDULE",
+            "title": "New meeting",
+            "data": {
+                "topic_init": {"type": "string", "__example__": "Project sync"},
+                "name_init": {"type": "string", "__example__": "Harsh"},
+                "email_init": {"type": "string", "__example__": "harsh@example.com"},
+                "min_date": {"type": "string", "__example__": "1749686400000"},
+                "date_init": {"type": "string", "__example__": "1749772800000"},
+                "time_init": {"type": "string", "__example__": "09:00"},
+                "is_time_enabled": {"type": "boolean", "__example__": true},
+                "time": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "enabled": {"type": "boolean"}
+                        }
+                    },
+                    "__example__": [
+                        {"id": "09:00", "title": "9:00 AM"},
+                        {"id": "09:30", "title": "9:30 AM", "enabled": false},
+                        {"id": "10:00", "title": "10:00 AM"}
+                    ]
+                }
+            },
+            "layout": {
+                "type": "SingleColumnLayout",
+                "children": [
+                    {
+                        "type": "Form",
+                        "name": "schedule_form",
+                        "init-values": {
+                            "topic": "${data.topic_init}",
+                            "name": "${data.name_init}",
+                            "email": "${data.email_init}",
+                            "date": "${data.date_init}",
+                            "time": "${data.time_init}"
+                        },
+                        "children": [
+                            {"type": "TextInput", "label": "Topic", "name": "topic", "input-type": "text", "required": true},
+                            {"type": "TextInput", "label": "Name", "name": "name", "input-type": "text", "required": true},
+                            {"type": "TextInput", "label": "Email", "name": "email", "input-type": "email", "required": true},
+                            {
+                                "type": "DatePicker",
+                                "label": "Date",
+                                "name": "date",
+                                "min-date": "${data.min_date}",
+                                "required": true,
+                                "on-select-action": {
+                                    "name": "data_exchange",
+                                    "payload": {"trigger": "date_selected", "date": "${form.date}"}
+                                }
+                            },
+                            {
+                                "type": "Dropdown",
+                                "label": "Time",
+                                "name": "time",
+                                "data-source": "${data.time}",
+                                "required": "${data.is_time_enabled}",
+                                "enabled": "${data.is_time_enabled}"
+                            },
+                            {
+                                "type": "Footer",
+                                "label": "Continue",
+                                "on-click-action": {
+                                    "name": "data_exchange",
+                                    "payload": {
+                                        "trigger": "review",
+                                        "topic": "${form.topic}",
+                                        "name": "${form.name}",
+                                        "email": "${form.email}",
+                                        "date": "${form.date}",
+                                        "time": "${form.time}"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "SUMMARY",
+            "title": "Confirm",
+            "terminal": true,
+            "data": {
+                "summary": {"type": "string", "__example__": "Project sync with Harsh\nThu Jun 12, 09:00 AM\nharsh@example.com"},
+                "topic": {"type": "string", "__example__": "Project sync"},
+                "name": {"type": "string", "__example__": "Harsh"},
+                "email": {"type": "string", "__example__": "harsh@example.com"},
+                "date": {"type": "string", "__example__": "1749772800000"},
+                "time": {"type": "string", "__example__": "09:00"}
+            },
+            "layout": {
+                "type": "SingleColumnLayout",
+                "children": [
+                    {
+                        "type": "Form",
+                        "name": "summary_form",
+                        "children": [
+                            {"type": "TextHeading", "text": "Confirm meeting"},
+                            {"type": "TextBody", "text": "${data.summary}"},
+                            {
+                                "type": "Footer",
+                                "label": "Schedule Google Meet",
+                                "on-click-action": {
+                                    "name": "complete",
+                                    "payload": {
+                                        "topic": "${data.topic}",
+                                        "name": "${data.name}",
+                                        "email": "${data.email}",
+                                        "date": "${data.date}",
+                                        "time": "${data.time}"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}

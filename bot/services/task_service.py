@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from bot.config import config
 from bot.database import async_session, User, Task, TaskConversationState
-from bot.services.calendar import create_event, find_conflicts, find_free_slots, delete_event, update_event
+from bot.services.calendar import create_event, find_conflicts, delete_event, update_event
 from bot.utils.time import (
     IST, UTC, utcnow_aware, utcnow_naive, now_prompt_str,
     to_utc_naive, ensure_aware_local,
@@ -23,8 +23,8 @@ from bot.utils.time import (
 logger = logging.getLogger(__name__)
 
 # Groq client (OpenAI-compatible)
-_client = OpenAI(base_url=config.GROQ_BASE_URL, api_key=config.GROQ_API_KEY)
-MODEL = config.GROQ_MODEL
+_client = OpenAI(base_url=config.SARVAM_BASE_URL, api_key=config.SARVAM_API_KEY)
+MODEL = config.SARVAM_MODEL
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -232,18 +232,6 @@ async def check_calendar_conflicts(wa_id: str, proposed_start: datetime, duratio
     return all_conflicts
 
 
-async def get_suggested_slots(wa_id: str, around_time: datetime, duration: int = 30, count: int = 3):
-    """Get suggested free time slots near a given time."""
-    db_user = await _get_user(wa_id)
-    if not db_user or not db_user.google_token_json:
-        return []
-    try:
-        return await find_free_slots(db_user, around_time, duration, count)
-    except Exception as e:
-        logger.error(f"Slot suggestion failed: {e}")
-        return []
-
-
 # ═══════════════════════════════════════════════════════════════
 # Task CRUD + State Transitions
 # ═══════════════════════════════════════════════════════════════
@@ -291,7 +279,7 @@ async def schedule_task(task_id: int) -> dict:
         if db_user and db_user.google_token_json and task.scheduled_at:
             scheduled_ist = UTC.localize(task.scheduled_at).astimezone(IST)
             try:
-                desc = f"📍 {task.location_text or 'In-person'}" if task.mode == "offline" else None
+                desc = f"Location: {task.location_text or 'In-person'}" if task.mode == "offline" else None
                 event_info = await create_event(
                     db_user, title=task.title, event_dt=scheduled_ist,
                     duration_minutes=task.duration_minutes,

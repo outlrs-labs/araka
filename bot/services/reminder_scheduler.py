@@ -212,7 +212,7 @@ async def _fire_reminder_async(reminder_id: int) -> None:
             new_remind_at = None
 
     # ── Step 2: Send (outside the DB session) ─────────────────
-    ok = send_message(wa_id, f"⏰ Reminder:\n\n{message}")
+    ok = send_message(wa_id, f"reminder:\n\n{message}")
 
     # ── Step 3: Finalise ──────────────────────────────────────
     if not ok:

@@ -46,10 +46,75 @@ PRIVACY_URL = (
     "https://docs.google.com/document/d/e/"
     "2PACX-1vTxvJzZceBjtOtKOFKzBw_yZYKlCO2qYdQpf5kBCVUeVHjY9VOwm8IJ0HwRDcDVYMCgLTIe90vjMWA6/pub"
 )
+# Full Terms & Conditions URL (set once you publish Document/TERMS_AND_CONDITIONS.md).
+# Empty = show only the short in-chat summary.
+TERMS_URL = ""
 
 
 def _privacy_line() -> str:
-    return f"🔒 We only store what you ask us to schedule. Privacy: {PRIVACY_URL}"
+    return f"we only store what you ask us to schedule. privacy: {PRIVACY_URL}"
+
+
+def _consent_buttons() -> list:
+    return [
+        {"id": "show_terms",     "title": "Terms"},
+        {"id": "show_privacy",   "title": "Privacy"},
+        {"id": "connect_google", "title": "Connect Google"},
+    ]
+
+
+def send_consent_screen(wa_id: str) -> None:
+    """Transparent consent step: explain access, link Terms + Privacy, then connect."""
+    send_buttons(
+        wa_id,
+        "one last thing, so we're fully upfront:\n\n"
+        "connecting google lets me use your *calendar, meet and contacts* "
+        "(and read gmail only when you ask about an email). i touch only what "
+        "you ask me to schedule, never sell your data, and you can say "
+        "*delete my data* anytime.\n\n"
+        "by tapping *Connect Google* you agree to araka's terms & privacy "
+        "policy — tap to read them first.",
+        _consent_buttons(),
+    )
+
+
+async def send_terms(wa_id: str) -> None:
+    """Short Terms summary + full link, then re-offer the consent buttons."""
+    body = (
+        "*terms & conditions (short version)*\n\n"
+        "- araka is a scheduling assistant — not a general chatbot or "
+        "professional advice.\n"
+        "- a meeting is created only after you tap *Confirm*. review the "
+        "details yourself; we're not liable for mistaken or missed meetings.\n"
+        "- only add other people's contact details if you have their "
+        "permission.\n"
+        "- use araka lawfully — no spam, harassment, or unlawful content.\n"
+        "- provided as-is, free for now."
+    )
+    if TERMS_URL:
+        body += f"\n\nfull terms: {TERMS_URL}"
+    send_message(wa_id, body)
+    send_buttons(wa_id, "all good? you can read the privacy notice too, or connect.",
+                 _consent_buttons())
+
+
+async def send_privacy(wa_id: str) -> None:
+    """Short Privacy summary + full link, then re-offer the consent buttons."""
+    send_message(
+        wa_id,
+        "*privacy (short version)*\n\n"
+        "- i store only what you ask me to schedule (meetings, reminders, "
+        "notes) plus your name and timezone.\n"
+        "- google data (calendar, contacts, gmail) is used only to help you, "
+        "*never sold and never used to train ai*.\n"
+        "- i message people you book with via an approved template; they can "
+        "reply *STOP*.\n"
+        "- say *delete my data* anytime to erase everything; *disconnect* to "
+        "unlink google."
+        f"\n\nfull notice: {PRIVACY_URL}",
+    )
+    send_buttons(wa_id, "all good? you can read the terms too, or connect.",
+                 _consent_buttons())
 
 
 def _pretty_number(wa_id: str) -> str:
@@ -92,15 +157,21 @@ async def start_onboarding(wa_id: str) -> None:
     await _set_step(wa_id, STEP_WA)
     send_message(
         wa_id,
-        "👋 Hi! I'm *FollowUp Bot* — I help you schedule meetings and never "
-        "drop a commitment.\n\n" + _privacy_line(),
+        "look who went official\n\n"
+        "meta makes me say this before we start, so here: i'm an automated "
+        "AI agent. now that the boring part is over: i'm araka, and i live "
+        "right here in your texts now, way faster, and i can drop buttons "
+        "and lists whenever we need them\n\n"
+        "this is where all your reminders and notifications are gonna land "
+        "from now on. say \"unsubscribe\" anytime if it gets too much\n\n"
+        "what's good?\n\n" + _privacy_line(),
     )
     send_buttons(
         wa_id,
-        f"First, is *{_pretty_number(wa_id)}* the best number to reach you on?",
+        f"quick check — is *{_pretty_number(wa_id)}* the right number for you?",
         [
-            {"id": "onboard_wa_yes",   "title": "✅ Yes, that's me"},
-            {"id": "onboard_wa_other", "title": "📱 Different no."},
+            {"id": "onboard_wa_yes",   "title": "Yes, that's me"},
+            {"id": "onboard_wa_other", "title": "Different number"},
         ],
     )
 
@@ -125,7 +196,7 @@ async def confirm_whatsapp(wa_id: str) -> None:
             await session.commit()
     send_message(
         wa_id,
-        "Great! What should I call you? (Just your first name is fine.)",
+        "noted. what should i call you? first name is fine.",
     )
 
 
@@ -133,11 +204,11 @@ async def reject_whatsapp(wa_id: str) -> None:
     """v1 always uses the WhatsApp number the user is messaging from."""
     send_buttons(
         wa_id,
-        "For v1, I work on the WhatsApp number you're messaging me from — "
-        "so let's use this one. Sound good?",
+        "for now i work on the number you're texting me from — let's use "
+        "this one. sound good?",
         [
-            {"id": "onboard_wa_yes",   "title": "✅ Use this number"},
-            {"id": "onboard_wa_other", "title": "❔ Ask me later"},
+            {"id": "onboard_wa_yes",   "title": "Use this number"},
+            {"id": "onboard_wa_other", "title": "Ask me later"},
         ],
     )
 
@@ -149,7 +220,7 @@ async def confirm_timezone(wa_id: str) -> None:
 async def change_timezone_prompt(wa_id: str) -> None:
     send_message(
         wa_id,
-        "🌐 No problem — type your timezone in IANA form, e.g. "
+        "no problem — type your timezone in IANA form, e.g. "
         "*America/New_York*, *Europe/London*, or *Asia/Dubai*.",
     )
 
@@ -170,13 +241,13 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
     if text.lower() == "privacy":
         send_message(
             wa_id,
-            "🔒 *Privacy*\n\n"
-            "• I store only the meetings/reminders you ask me to create.\n"
-            "• I don't keep a transcript of our chat.\n"
-            "• Your Google token is stored encrypted and used only for "
-            "your calendar.\n"
-            "• Reply *delete my data* anytime to wipe everything."
-            f"\n\nFull notice: {PRIVACY_URL}",
+            "*privacy*\n\n"
+            "- i store only the meetings and reminders you ask me to create\n"
+            "- i don't keep a transcript of our chat\n"
+            "- your google token is stored encrypted and used only for "
+            "your calendar\n"
+            "- reply *delete my data* anytime to wipe everything"
+            f"\n\nfull notice: {PRIVACY_URL}",
         )
         return True
 
@@ -187,13 +258,13 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
         step = u.onboarding_step if u else None
 
     if step == STEP_WA:
-        send_message(wa_id, "Please tap one of the buttons above to continue 👆")
+        send_message(wa_id, "tap one of the buttons above to continue")
         return True
 
     if step == STEP_NAME:
         name = text[:_MAX_NAME].strip()
         if len(name) < 1:
-            send_message(wa_id, "I didn't catch a name — what should I call you?")
+            send_message(wa_id, "didn't catch a name — what should i call you?")
             return True
         async with async_session() as session:
             u = (await session.execute(
@@ -206,12 +277,12 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
                 await session.commit()
         send_buttons(
             wa_id,
-            f"Nice to meet you, {name}! 🎉\n\n"
-            "Last step — I'll use *India Standard Time (IST)* for your "
-            "reminders. Is that right?",
+            f"nice to meet you, {name}.\n\n"
+            "last step — i'll use *India Standard Time (IST)* for your "
+            "reminders. is that right?",
             [
-                {"id": "onboard_tz_yes",    "title": "✅ Yes, use IST"},
-                {"id": "onboard_tz_change", "title": "🌐 Change"},
+                {"id": "onboard_tz_yes",    "title": "Yes, use IST"},
+                {"id": "onboard_tz_change", "title": "Change"},
             ],
         )
         return True
@@ -221,7 +292,7 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
         if not tz_name:
             send_message(
                 wa_id,
-                "Hmm, I don't recognise that timezone. Try an IANA name like "
+                "i don't recognise that timezone. try an IANA name like "
                 "*Asia/Kolkata* or *America/New_York* — or tap *Yes, use IST*.",
             )
             return True
@@ -250,17 +321,9 @@ async def _set_timezone_and_finish(wa_id: str, tz_name: str) -> None:
             await session.commit()
 
     nice_tz = "IST" if tz_name == "Asia/Kolkata" else tz_name
-    send_message(wa_id, f"✅ All set! Timezone: *{nice_tz}*.")
-    # Offer Google as the final (optional) step.
-    send_buttons(
-        wa_id,
-        "🔗 Connect your Google account to unlock *Calendar, Contacts & "
-        "Meet*. (You can also just start with notes & reminders.)",
-        [
-            {"id": "connect_google",    "title": "🔗 Connect Google"},
-            {"id": "show_capabilities", "title": "ℹ️ What can I do?"},
-        ],
-    )
+    send_message(wa_id, f"all set. timezone: *{nice_tz}*.")
+    # Transparent consent step: Terms / Privacy / Connect Google.
+    send_consent_screen(wa_id)
 
 
 async def on_google_connected(wa_id: str) -> None:

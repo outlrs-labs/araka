@@ -222,6 +222,23 @@ def _decrypt_token_json(stored_token: str) -> str:
     return cipher.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
 
 
+def _missing_google_scopes(stored_token: str) -> list[str]:
+    """Return required Google scopes that are absent from a stored token."""
+    if not stored_token:
+        return list(config.GOOGLE_SCOPES)
+    try:
+        token_data = json.loads(_decrypt_token_json(stored_token))
+        raw_scope = token_data.get("scope") or token_data.get("scopes") or ""
+        if isinstance(raw_scope, str):
+            granted = set(raw_scope.split())
+        else:
+            granted = set(raw_scope)
+        return [scope for scope in config.GOOGLE_SCOPES if scope not in granted]
+    except Exception as e:
+        logger.debug(f"Could not inspect Google token scopes: {e}")
+        return []
+
+
 # ─── Connection status check ────────────────────────────────
 
 async def is_google_connected(wa_id: str) -> bool:
@@ -240,19 +257,22 @@ async def handle_connect(wa_id: str, display_name: str = ""):
     if not flow:
         send_message(
             wa_id,
-            "⚠️ Google credentials file not found.\n"
-            "Place credentials.json in the bot directory.",
+            "google credentials file not found. "
+            "place credentials.json in the bot directory.",
         )
         return
 
-    # Already connected? Offer status instead of re-auth
+    # Already connected? Offer status unless new scopes were added.
+    missing_scopes = []
     async with async_session() as session:
         result = await session.execute(select(User).where(User.wa_id == wa_id))
         db_user = result.scalar_one_or_none()
         if db_user and db_user.google_token_json:
-            send_buttons(wa_id, "✅ Your Google account is already connected!", [
-                {"id": "disconnect_google", "title": "🔓 Disconnect"},
-                {"id": "show_capabilities", "title": "ℹ️ What can I do?"},
+            missing_scopes = _missing_google_scopes(db_user.google_token_json)
+        if db_user and db_user.google_token_json and not missing_scopes:
+            send_buttons(wa_id, "your google account is already connected.", [
+                {"id": "disconnect_google", "title": "Disconnect"},
+                {"id": "show_capabilities", "title": "What can I do?"},
             ])
             return
 
@@ -265,12 +285,16 @@ async def handle_connect(wa_id: str, display_name: str = ""):
     # Persist the handshake durably (survives restart).
     await _save_oauth_state(state, wa_id)
 
-    # Send just the clickable link — no verbose instructions
+    if missing_scopes:
+        lead = "*tap to update google permissions:*"
+    else:
+        lead = "*tap to connect google:*"
+
     send_message(
         wa_id,
-        f"🔗 *Tap to connect Google:*\n\n"
+        f"{lead}\n\n"
         f"{auth_url}\n\n"
-        f"_After allowing access, copy the URL from your browser and paste it here._",
+        f"_after allowing access, copy the url from your browser and paste it here._",
     )
 
 
@@ -298,8 +322,7 @@ async def handle_oauth_callback(code: str, state: str) -> Optional[str]:
 
         send_message(
             wa_id,
-            "✅ *Google account connected!*\n\n"
-            "📅 Calendar • 📇 Contacts • 🖥 Meet — all ready!",
+            "*google connected.* calendar, contacts, gmail and meet are ready.",
         )
         logger.info(f"Google connected via callback for wa_id={wa_id}")
         await _notify_onboarding_google_connected(wa_id)
@@ -307,7 +330,7 @@ async def handle_oauth_callback(code: str, state: str) -> Optional[str]:
 
     except Exception as e:
         logger.error(f"OAuth callback exchange error: {e}", exc_info=True)
-        send_message(wa_id, f"❌ Connection failed: {e}\n\nPlease try connecting again.")
+        send_message(wa_id, f"connection failed: {e}\n\ntry connecting again.")
         return None
 
 
@@ -350,14 +373,14 @@ async def handle_auth_code(wa_id: str, text: str) -> bool:
 
     flow = _build_flow()
     if not flow:
-        send_message(wa_id, "⚠️ Google credentials file not found.")
+        send_message(wa_id, "google credentials file not found.")
         return True
 
     try:
         parsed = urlparse(text.strip())
         code = parse_qs(parsed.query).get("code", [None])[0]
         if not code:
-            send_message(wa_id, "❌ Couldn't find the code in that URL. Try connecting again.")
+            send_message(wa_id, "couldn't find the code in that url. try connecting again.")
             return True
 
         flow.fetch_token(code=code)
@@ -369,15 +392,14 @@ async def handle_auth_code(wa_id: str, text: str) -> bool:
 
         send_message(
             wa_id,
-            "✅ *Google account connected!*\n\n"
-            "📅 Calendar • 📇 Contacts • 🖥 Meet — all ready!",
+            "*google connected.* calendar, contacts, gmail and meet are ready.",
         )
         logger.info(f"Google connected via paste for wa_id={wa_id}")
         await _notify_onboarding_google_connected(wa_id)
 
     except Exception as e:
         logger.error(f"OAuth exchange error: {e}", exc_info=True)
-        send_message(wa_id, f"❌ Connection failed: {e}\n\nPlease try connecting again.")
+        send_message(wa_id, f"connection failed: {e}\n\ntry connecting again.")
 
     return True
 
@@ -390,14 +412,14 @@ async def handle_disconnect(wa_id: str):
         result = await session.execute(select(User).where(User.wa_id == wa_id))
         db_user = result.scalar_one_or_none()
         if not db_user or not db_user.google_token_json:
-            send_message(wa_id, "ℹ️ No Google account is linked.")
+            send_message(wa_id, "no google account is linked.")
             return
         db_user.google_token_json = None
         db_user.google_email = None
         await session.commit()
 
     await _clear_oauth_states(wa_id)
-    send_message(wa_id, "✅ Google account disconnected.")
+    send_message(wa_id, "google account disconnected.")
 
 
 # ─── Credential loader ───────────────────────────────────────

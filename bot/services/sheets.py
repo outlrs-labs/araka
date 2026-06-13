@@ -216,7 +216,7 @@ async def add_todo_to_sheet(user_db, items: list) -> dict:
         added_items = []
         for i, item in enumerate(items):
             idx = next_idx + i
-            new_rows.append([str(idx), item.strip(), "⬜ Pending", now_str, ""])
+            new_rows.append([str(idx), item.strip(), "Pending", now_str, ""])
             added_items.append({"index": idx, "task": item.strip(), "status": "Pending"})
 
         svc.spreadsheets().values().append(
@@ -304,10 +304,10 @@ async def update_todo_status(user_db, item_index: int, done: bool = True) -> dic
         tz = pytz.timezone(config.BOT_TIMEZONE)
 
         if done:
-            new_status = "✅ Done"
+            new_status = "Done"
             completed_at = datetime.now(tz).strftime("%Y-%m-%d %I:%M %p")
         else:
-            new_status = "⬜ Pending"
+            new_status = "Pending"
             completed_at = ""
 
         # Update status (col C) and completed_at (col E)

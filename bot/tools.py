@@ -7,11 +7,12 @@ User identifier is wa_id (WhatsApp phone number string).
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
-from bot.database import async_session, User, Note, Reminder
+from bot.database import async_session, User, Note, Reminder, Task
 from bot.services.calendar import create_event, get_all_events, delete_event, update_event
 from bot.services.contacts import search_contacts
 from bot.config import config
@@ -122,7 +123,7 @@ async def calendar_create(wa_id: str, title: str, start_time_iso: str,
                 except Exception:
                     conflict_lines.append(f'"{c["summary"]}"')
             return (
-                f"⚠️ CONFLICT DETECTED: The time slot {dt.strftime('%b %d, %I:%M %p')} "
+                f"CONFLICT DETECTED: The time slot {dt.strftime('%b %d, %I:%M %p')} "
                 f"is NOT available. You already have: {'; '.join(conflict_lines)}. "
                 f"Please ask the user if they want to pick a different time or proceed anyway."
             )
@@ -171,6 +172,183 @@ async def calendar_get_all(wa_id: str, limit: int = 10) -> str:
         return "Events:\n" + "\n".join(lines)
     except Exception as e:
         return f"Failed to fetch events: {e}"
+
+
+_CALENDAR_CANCEL_STOPWORDS = {
+    "a", "an", "and", "at", "calendar", "cancel", "cancell", "cancelled",
+    "delete", "event", "for", "from", "in", "meeting", "meet", "my", "of",
+    "on", "please", "remove", "the", "to", "with",
+}
+
+
+def _event_start_local(ev: dict):
+    start = (ev.get("start") or {}).get("dateTime") or (ev.get("start") or {}).get("date")
+    if not start:
+        return None
+    try:
+        raw = start.replace("Z", "+00:00")
+        if "T" not in raw:
+            raw = f"{raw}T00:00:00"
+        return ensure_aware_local(datetime.fromisoformat(raw))
+    except Exception:
+        return None
+
+
+def _event_search_text(ev: dict) -> str:
+    attendees = " ".join(a.get("email", "") for a in ev.get("attendees", []) or [])
+    return " ".join([
+        ev.get("summary", "") or "",
+        ev.get("description", "") or "",
+        attendees,
+    ]).lower()
+
+
+def _calendar_cancel_tokens(query: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9@._+-]+", (query or "").lower())
+    return [t for t in tokens if t not in _CALENDAR_CANCEL_STOPWORDS and len(t) > 1]
+
+
+def _format_calendar_event(ev: dict) -> str:
+    start = _event_start_local(ev)
+    when = start.strftime("%a %b %d, %I:%M %p") if start else "time unknown"
+    return f"{ev.get('summary', 'Untitled')} | {when}"
+
+
+async def _mark_event_task_cancelled(wa_id: str, event_id: str) -> None:
+    """Mark any bot Task linked to this calendar event as cancelled."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Task).where(
+                Task.wa_id == wa_id,
+                Task.external_event_id == event_id,
+                Task.status.notin_(["completed", "cancelled"]),
+            )
+        )
+        changed = False
+        for task in result.scalars().all():
+            task.status = "cancelled"
+            task.updated_at = utcnow_naive()
+            changed = True
+        if changed:
+            await session.commit()
+
+
+async def calendar_cancel(wa_id: str, query: str = "", start_time_iso: str = "",
+                          cancel_all: bool = False, limit: int = 50) -> str:
+    """Cancel upcoming Google Calendar event(s) and delete them from Calendar.
+
+    Three modes:
+      - cancel_all=True (or the query says all/everything/both) → delete every
+        upcoming event, or just today's if the query mentions "today".
+      - a clear single match (by person/title/time) → delete that one.
+      - a vague request with several events → LIST them so the user can choose.
+    Any linked bot Task is marked cancelled too.
+    """
+    db_user = await _get_user(wa_id)
+    if not db_user:
+        return "User not found."
+    if not db_user.google_token_json:
+        return NOT_CONNECTED
+
+    try:
+        events = await get_all_events(db_user, max_results=max(10, min(int(limit or 50), 100)))
+    except Exception as e:
+        return f"Failed to fetch events: {e}"
+    if not events:
+        return "NO_EVENTS: There are no upcoming events to cancel."
+
+    ql = (query or "").lower()
+    now_l = now_local()
+
+    def _is_today(ev):
+        s = _event_start_local(ev)
+        return bool(s and s.date() == now_l.date())
+
+    # ── Cancel-all (optionally just today) ──
+    if cancel_all or re.search(r"\b(all|everything|every meeting|both)\b", ql):
+        wants_today = "today" in ql
+        targets = [e for e in events if (not wants_today or _is_today(e))]
+        if not targets:
+            return "NO_EVENTS: No matching events to cancel."
+        deleted = []
+        for ev in targets:
+            eid = ev.get("id")
+            if not eid:
+                continue
+            try:
+                await delete_event(db_user, eid)
+                await _mark_event_task_cancelled(wa_id, eid)
+                deleted.append(_format_calendar_event(ev))
+            except Exception as e:
+                logger.warning(f"cancel-all: failed to delete {eid}: {e}")
+        if not deleted:
+            return "Failed to cancel the events. Please try again."
+        return (f"CALENDAR_EVENTS_CANCELLED: Deleted {len(deleted)} event(s):\n- "
+                + "\n- ".join(deleted))
+
+    tokens = _calendar_cancel_tokens(query)
+    target = None
+    target_has_time = False
+    if start_time_iso:
+        try:
+            target = ensure_aware_local(datetime.fromisoformat(start_time_iso.replace("Z", "+00:00")))
+            target_has_time = bool(target.hour or target.minute)
+        except Exception:
+            target = None
+
+    # ── Vague (no usable words, no time) → show the list to pick from ──
+    if not tokens and not target:
+        lines = ["CHOOSE_EVENT: Which one should I cancel? Reply with the title or time, or say 'all'."]
+        for ev in events[:10]:
+            lines.append(f"- {_format_calendar_event(ev)}")
+        return "\n".join(lines)
+
+    # ── Scored match ──
+    candidates = []
+    for ev in events:
+        text = _event_search_text(ev)
+        score = 0
+        if tokens:
+            score = sum(1 for token in tokens if token in text)
+            if score == 0:
+                continue
+        ev_start = _event_start_local(ev)
+        if target:
+            if not ev_start or ev_start.date() != target.date():
+                continue
+            if target_has_time:
+                delta_min = abs((ev_start - target).total_seconds()) / 60
+                if delta_min > 120:
+                    continue
+                score += max(1, 8 - int(delta_min // 15))
+            else:
+                score += 2
+        if score > 0:
+            candidates.append((score, ev))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    if not candidates:
+        return f"NO_CALENDAR_MATCH: I could not find an upcoming event matching {query!r}."
+
+    # Ambiguous only when the top two tie — otherwise take the clear winner.
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+        lines = ["MULTIPLE_CALENDAR_MATCHES: More than one event matches — which "
+                 "one? Reply with the time, or say 'all':"]
+        for _, ev in candidates[:5]:
+            lines.append(f"- {_format_calendar_event(ev)}")
+        return "\n".join(lines)
+
+    ev = candidates[0][1]
+    event_id = ev.get("id")
+    if not event_id:
+        return "Failed to delete event: Google did not return an event id."
+    try:
+        await delete_event(db_user, event_id)
+    except Exception as e:
+        return f"Failed to delete event: {e}"
+    await _mark_event_task_cancelled(wa_id, event_id)
+    return f"CALENDAR_EVENT_CANCELLED: Deleted {_format_calendar_event(ev)}."
 
 
 async def calendar_delete(wa_id: str, event_id: str) -> str:
@@ -224,10 +402,60 @@ async def contacts_search(wa_id: str, query: str = "", limit: int = 5) -> str:
         for c in contacts:
             emails = ", ".join(c["emails"]) if c["emails"] else "—"
             phones = ", ".join(c["phones"]) if c["phones"] else "—"
-            lines.append(f"• {c['name']}  📧 {emails}  📱 {phones}")
+            lines.append(f"- {c['name']} — email: {emails}, phone: {phones}")
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to search contacts: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Gmail
+# ═══════════════════════════════════════════════════════════════
+
+async def gmail_search(wa_id: str, query: str = "", limit: int = 5,
+                       include_body: bool = False) -> str:
+    """Search Gmail and return recent matching messages."""
+    db_user = await _get_user(wa_id)
+    if not db_user:
+        return "User not found."
+    if not db_user.google_token_json:
+        return NOT_CONNECTED
+
+    try:
+        from bot.services.gmail import GmailScopeError, search_messages
+        messages = await search_messages(
+            db_user,
+            query=query,
+            max_results=limit,
+            include_body=include_body,
+        )
+    except GmailScopeError:
+        return (
+            "GMAIL_SCOPE_MISSING: Google is connected, but Gmail permission is "
+            "missing. Ask the user to type connect and grant the updated Gmail "
+            "permission. SHOW_CONNECT_BUTTON"
+        )
+    except Exception as e:
+        return f"Failed to search Gmail: {e}"
+
+    if not messages:
+        return "No matching email found."
+
+    lines = [f"Gmail results for {query!r}:" if query else "Recent Gmail messages:"]
+    for i, msg in enumerate(messages, start=1):
+        lines.append(
+            f"{i}. From: {msg.get('from') or 'unknown'} | "
+            f"Subject: {msg.get('subject') or '(no subject)'} | "
+            f"Date: {msg.get('date') or 'unknown'}"
+        )
+        snippet = msg.get("snippet") or ""
+        if snippet:
+            lines.append(f"   Snippet: {snippet[:350]}")
+        if include_body:
+            body = msg.get("body") or ""
+            if body:
+                lines.append(f"   Body: {body[:900]}")
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -405,7 +633,7 @@ async def set_reminder(wa_id: str, message: str, remind_at_iso: str = "",
     """
     if reminder_type not in ("text", "notes", "calendar"):
         reminder_type = "text"
-    labels = {"text": "📝", "notes": "📒", "calendar": "📅"}
+    labels = {"text": "", "notes": "", "calendar": ""}
 
     try:
         # Local import dodges a circular dep (services → tools → services)
@@ -480,25 +708,6 @@ async def set_reminder(wa_id: str, message: str, remind_at_iso: str = "",
         return f"Failed to set reminder: {e}"
 
 
-async def set_daily_message(wa_id: str, message: str, time_hhmm: str) -> str:
-    from bot.services.reminder_scheduler import schedule_reminder
-    try:
-        h, m = [int(x) for x in time_hhmm.strip().split(":")]
-        target = next_occurrence_local(h, m)
-        dt_utc = to_utc_naive(target)
-        async with async_session() as session:
-            rem = Reminder(wa_id=wa_id, message=message, remind_at=dt_utc,
-                           is_recurring=True, recur_time=f"{h:02d}:{m:02d}")
-            session.add(rem)
-            await session.flush()
-            rid = rem.id
-            await session.commit()
-        schedule_reminder(rid, dt_utc)
-        return f'Daily message #{rid} set for {h:02d}:{m:02d} every day: "{message}"'
-    except Exception as e:
-        return f"Failed to set daily message: {e}"
-
-
 async def list_reminders(wa_id: str) -> str:
     now_utc = utcnow_naive()
     recent_cutoff = now_utc - timedelta(minutes=30)
@@ -531,14 +740,14 @@ async def list_reminders(wa_id: str) -> str:
         lines.append("Active reminders:")
         for r in active:
             dt_local = to_local_aware(r.remind_at)
-            rtype = "🔁 Daily" if r.is_recurring else "🔔"
+            rtype = "Daily" if r.is_recurring else "One-time"
             lines.append(f'#{r.id} {rtype} at {dt_local.strftime("%b %d, %I:%M %p")}: "{r.message}"')
 
     if fired:
-        lines.append("\nRecently fired (already sent ✅):")
+        lines.append("\nRecently fired (already sent):")
         for r in fired:
             dt_local = to_local_aware(r.remind_at)
-            lines.append(f'#{r.id} ✅ FIRED at {dt_local.strftime("%I:%M %p")}: "{r.message}" — DO NOT create a duplicate.')
+            lines.append(f'#{r.id} FIRED at {dt_local.strftime("%I:%M %p")}: "{r.message}" — DO NOT create a duplicate.')
 
     return "\n".join(lines)
 
@@ -589,7 +798,7 @@ async def add_todo(wa_id: str, items: str) -> str:
     if "error" in result:
         return result["error"]
 
-    lines = [f"✅ Added {result['added']} item(s) to your to-do list:\n"]
+    lines = [f"Added {result['added']} item(s) to your to-do list:\n"]
     for item in result.get("items", []):
         lines.append(f"  {item['index']}. {item['task']}")
     lines.append(f"\nTotal items: {result.get('total', '?')}")
@@ -616,7 +825,7 @@ async def get_todos(wa_id: str) -> str:
 
     lines = ["Your to-do list:\n"]
     for item in items:
-        status_icon = "✅" if "Done" in item.get("status", "") else "⬜"
+        status_icon = "[done]" if "Done" in item.get("status", "") else "[ ]"
         lines.append(f"  {item['index']}. {status_icon} {item['task']}")
     return "\n".join(lines)
 
@@ -636,7 +845,7 @@ async def complete_todo(wa_id: str, item_number: int, done: bool = True) -> str:
         return result["error"]
 
     action = "completed" if done else "reopened"
-    return f'✅ To-do #{result["item_index"]} "{result["task"]}" marked as {action}.'
+    return f'To-do #{result["item_index"]} "{result["task"]}" marked as {action}.'
 
 
 async def delete_todo(wa_id: str, item_number: int) -> str:
@@ -653,4 +862,4 @@ async def delete_todo(wa_id: str, item_number: int) -> str:
     if "error" in result:
         return result["error"]
 
-    return f'🗑️ Deleted to-do #{result["item_index"]} "{result["task"]}".'
+    return f'Deleted to-do #{result["item_index"]} "{result["task"]}".'

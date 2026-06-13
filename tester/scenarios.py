@@ -270,6 +270,18 @@ async def scenario_email_keeps_time(sim: Simulator):
     sim.clear(CREATOR)
     STATE["conflicts"] = []
 
+    # Pin the LEGACY text path — this regression guard covers deployments
+    # without a published Flow (and the send_flow-failure fallback).
+    from bot.config import config
+    _saved_flow_id = config.WA_GMEET_FLOW_ID
+    config.WA_GMEET_FLOW_ID = ""
+    try:
+        await _email_keeps_time_body(sim)
+    finally:
+        config.WA_GMEET_FLOW_ID = _saved_flow_id
+
+
+async def _email_keeps_time_body(sim: Simulator):
     # "Akshay" is NOT in contacts → bot asks for email. Time was given up front.
     await sim.text(CREATOR, "Set a gmeet with Akshay for today 12 pm")
     expect("gmail" in sim.all_text(CREATOR).lower() or "email" in sim.all_text(CREATOR).lower(),
@@ -306,6 +318,50 @@ async def scenario_local_task_conflict(sim: Simulator):
            "a clash with the user's own bot meeting must be flagged BEFORE confirmation")
 
 
+# ════════════════════════════════════════════════════════════════
+# WhatsApp Flow — missing email opens the prefilled native form;
+# submitting the form books directly (form IS the confirmation)
+# ════════════════════════════════════════════════════════════════
+async def scenario_flow_form(sim: Simulator):
+    await H.make_onboarded_user(CREATOR, name="Harsh")
+    sim.clear(CREATOR)
+    STATE["conflicts"] = []
+
+    import json as _json
+    from bot.config import config
+    from bot.handlers import callback_handler as cb
+
+    _saved_flow_id = config.WA_GMEET_FLOW_ID
+    config.WA_GMEET_FLOW_ID = "1285391600472269"
+    try:
+        await sim.text(CREATOR, "Set a gmeet with Akshay for tomorrow 9 am")
+        last = sim.last(CREATOR)
+        expect(last and last["kind"] == "flow",
+               "missing attendee email must open the native form")
+        d = last["data"]
+        expect(d["name_init"] == "Akshay", "form must prefill the attendee name")
+        expect(d["time_init"] == "09:00",
+               f"form must prefill the mentioned time, got {d['time_init']!r}")
+        expect(len(await H.get_tasks(CREATOR)) == 0, "nothing booked before submit")
+
+        # User submits the form (nfm_reply payload).
+        tomorrow = (now_local() + timedelta(days=1)).date()
+        await cb.handle_gmeet_flow_completion(CREATOR, _json.dumps({
+            "topic": "Quick sync",
+            "name": "Akshay",
+            "email": "akshay@example.com",
+            "date": cb._epoch_ms_utc_midnight(tomorrow),
+            "time": "09:00",
+        }))
+        expect("saved" in sim.all_text(CREATOR).lower(),
+               "form submission must book directly — no second confirm card")
+        tasks = await H.get_tasks(CREATOR)
+        expect(len(tasks) == 1, f"exactly one Task after form submit, got {len(tasks)}")
+        expect(tasks[0].assignee_name == "Akshay", "assignee should come from the form")
+    finally:
+        config.WA_GMEET_FLOW_ID = _saved_flow_id
+
+
 # Ordered list the runner executes.
 ALL = [
     ("A.1 Onboarding",            scenario_onboarding),
@@ -318,4 +374,5 @@ ALL = [
     ("§12 Delete my data",       scenario_data_deletion),
     ("Email keeps the time",     scenario_email_keeps_time),
     ("Conflict vs own meeting",  scenario_local_task_conflict),
+    ("Flow form books meeting",  scenario_flow_form),
 ]
