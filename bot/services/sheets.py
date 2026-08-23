@@ -4,6 +4,7 @@ Each user gets one spreadsheet with three tabs:
   Tasks | Meetings | Follow-ups
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -32,12 +33,22 @@ def _get_sheets_service(user_db):
     return build("sheets", "v4", credentials=creds) if creds else None
 
 
+async def _service(user_db):
+    """Build the Sheets client off-loop — get_google_creds may refresh a token."""
+    return await asyncio.to_thread(_get_sheets_service, user_db)
+
+
+async def _run(request_execute):
+    """Run one Google API request off the shared event loop."""
+    return await asyncio.to_thread(request_execute)
+
+
 async def _ensure_spreadsheet(user_db):
     """Create or return the user's logging spreadsheet ID."""
     if user_db.google_sheet_id:
         return user_db.google_sheet_id
 
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not svc:
         return None
 
@@ -51,10 +62,10 @@ async def _ensure_spreadsheet(user_db):
                 {"properties": {"title": "To-Do", "index": 3}},
             ],
         }
-        spreadsheet = svc.spreadsheets().create(body=body).execute()
+        spreadsheet = await _run(svc.spreadsheets().create(body=body).execute)
         sheet_id = spreadsheet["spreadsheetId"]
 
-        svc.spreadsheets().values().batchUpdate(
+        await _run(svc.spreadsheets().values().batchUpdate(
             spreadsheetId=sheet_id,
             body={
                 "valueInputOption": "RAW",
@@ -65,7 +76,7 @@ async def _ensure_spreadsheet(user_db):
                     {"range": "To-Do!A1", "values": [TODO_HEADERS]},
                 ],
             },
-        ).execute()
+        ).execute)
 
         async with async_session() as session:
             result = await session.execute(select(User).where(User.id == user_db.id))
@@ -87,7 +98,7 @@ async def log_task_to_sheet(user_db, task):
     if not user_db or not user_db.google_token_json:
         return
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return
     try:
@@ -106,11 +117,11 @@ async def log_task_to_sheet(user_db, task):
             task.created_at.strftime("%Y-%m-%d %H:%M") if task.created_at else "",
             task.updated_at.strftime("%Y-%m-%d %H:%M") if task.updated_at else "",
         ]
-        svc.spreadsheets().values().append(
+        await _run(svc.spreadsheets().values().append(
             spreadsheetId=sheet_id, range="Tasks!A:K",
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
             body={"values": [row]},
-        ).execute()
+        ).execute)
     except Exception as e:
         logger.error(f"Sheet task log failed: {e}")
 
@@ -120,7 +131,7 @@ async def log_meeting_to_sheet(user_db, event_info: dict, mode: str = "online"):
     if not user_db or not user_db.google_token_json:
         return
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return
     try:
@@ -130,11 +141,11 @@ async def log_meeting_to_sheet(user_db, event_info: dict, mode: str = "online"):
             mode, event_info.get("meet", ""),
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         ]
-        svc.spreadsheets().values().append(
+        await _run(svc.spreadsheets().values().append(
             spreadsheetId=sheet_id, range="Meetings!A:G",
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
             body={"values": [row]},
-        ).execute()
+        ).execute)
     except Exception as e:
         logger.error(f"Sheet meeting log failed: {e}")
 
@@ -144,16 +155,16 @@ async def log_followup_to_sheet(user_db, task_id: int, action: str, details: str
     if not user_db or not user_db.google_token_json:
         return
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return
     try:
         row = [task_id, action, details, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")]
-        svc.spreadsheets().values().append(
+        await _run(svc.spreadsheets().values().append(
             spreadsheetId=sheet_id, range="Follow-ups!A:D",
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
             body={"values": [row]},
-        ).execute()
+        ).execute)
     except Exception as e:
         logger.error(f"Sheet follow-up log failed: {e}")
 
@@ -166,21 +177,21 @@ async def log_followup_to_sheet(user_db, task_id: int, action: str, details: str
 async def _ensure_todo_tab(svc, sheet_id: str) -> bool:
     """Make sure the To-Do tab exists. Auto-creates it for old sheets."""
     try:
-        meta = svc.spreadsheets().get(spreadsheetId=sheet_id, fields="sheets.properties.title").execute()
+        meta = await _run(svc.spreadsheets().get(spreadsheetId=sheet_id, fields="sheets.properties.title").execute)
         tab_names = [s["properties"]["title"] for s in meta.get("sheets", [])]
         if "To-Do" in tab_names:
             return True
         # Create the tab
-        svc.spreadsheets().batchUpdate(
+        await _run(svc.spreadsheets().batchUpdate(
             spreadsheetId=sheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": "To-Do"}}}]},
-        ).execute()
+        ).execute)
         # Add headers
-        svc.spreadsheets().values().update(
+        await _run(svc.spreadsheets().values().update(
             spreadsheetId=sheet_id, range="To-Do!A1",
             valueInputOption="RAW",
             body={"values": [TODO_HEADERS]},
-        ).execute()
+        ).execute)
         logger.info(f"Created To-Do tab in sheet {sheet_id}")
         return True
     except Exception as e:
@@ -194,7 +205,7 @@ async def add_todo_to_sheet(user_db, items: list) -> dict:
         return {"error": "GOOGLE_NOT_CONNECTED"}
 
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return {"error": "Could not access Google Sheets."}
 
@@ -202,9 +213,9 @@ async def add_todo_to_sheet(user_db, items: list) -> dict:
         await _ensure_todo_tab(svc, sheet_id)
 
         # Read existing rows to get next index number
-        existing = svc.spreadsheets().values().get(
+        existing = await _run(svc.spreadsheets().values().get(
             spreadsheetId=sheet_id, range="To-Do!A:E"
-        ).execute()
+        ).execute)
         rows = existing.get("values", [])
         next_idx = len(rows)  # Row 1 = header, so len = next number
 
@@ -219,11 +230,11 @@ async def add_todo_to_sheet(user_db, items: list) -> dict:
             new_rows.append([str(idx), item.strip(), "Pending", now_str, ""])
             added_items.append({"index": idx, "task": item.strip(), "status": "Pending"})
 
-        svc.spreadsheets().values().append(
+        await _run(svc.spreadsheets().values().append(
             spreadsheetId=sheet_id, range="To-Do!A:E",
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
             body={"values": new_rows},
-        ).execute()
+        ).execute)
 
         return {"added": len(items), "total": next_idx + len(items) - 1, "items": added_items}
 
@@ -238,16 +249,16 @@ async def get_todos_from_sheet(user_db) -> dict:
         return {"error": "GOOGLE_NOT_CONNECTED"}
 
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return {"error": "Could not access Google Sheets."}
 
     try:
         await _ensure_todo_tab(svc, sheet_id)
 
-        result = svc.spreadsheets().values().get(
+        result = await _run(svc.spreadsheets().values().get(
             spreadsheetId=sheet_id, range="To-Do!A:E"
-        ).execute()
+        ).execute)
         rows = result.get("values", [])
 
         if len(rows) <= 1:  # Only header
@@ -278,16 +289,16 @@ async def update_todo_status(user_db, item_index: int, done: bool = True) -> dic
         return {"error": "GOOGLE_NOT_CONNECTED"}
 
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return {"error": "Could not access Google Sheets."}
 
     try:
         await _ensure_todo_tab(svc, sheet_id)
 
-        result = svc.spreadsheets().values().get(
+        result = await _run(svc.spreadsheets().values().get(
             spreadsheetId=sheet_id, range="To-Do!A:E"
-        ).execute()
+        ).execute)
         rows = result.get("values", [])
 
         # Find the row with matching index
@@ -311,7 +322,7 @@ async def update_todo_status(user_db, item_index: int, done: bool = True) -> dic
             completed_at = ""
 
         # Update status (col C) and completed_at (col E)
-        svc.spreadsheets().values().batchUpdate(
+        await _run(svc.spreadsheets().values().batchUpdate(
             spreadsheetId=sheet_id,
             body={
                 "valueInputOption": "RAW",
@@ -320,7 +331,7 @@ async def update_todo_status(user_db, item_index: int, done: bool = True) -> dic
                     {"range": f"To-Do!E{target_row}", "values": [[completed_at]]},
                 ],
             },
-        ).execute()
+        ).execute)
 
         task_name = rows[target_row - 1][1] if len(rows[target_row - 1]) > 1 else "Unknown"
         return {"item_index": item_index, "task": task_name, "new_status": new_status}
@@ -336,16 +347,16 @@ async def delete_todo_from_sheet(user_db, item_index: int) -> dict:
         return {"error": "GOOGLE_NOT_CONNECTED"}
 
     sheet_id = await _ensure_spreadsheet(user_db)
-    svc = _get_sheets_service(user_db)
+    svc = await _service(user_db)
     if not sheet_id or not svc:
         return {"error": "Could not access Google Sheets."}
 
     try:
         await _ensure_todo_tab(svc, sheet_id)
 
-        result = svc.spreadsheets().values().get(
+        result = await _run(svc.spreadsheets().values().get(
             spreadsheetId=sheet_id, range="To-Do!A:E"
-        ).execute()
+        ).execute)
         rows = result.get("values", [])
 
         # Find and clear the row (we clear content rather than delete to preserve indices)
@@ -361,7 +372,7 @@ async def delete_todo_from_sheet(user_db, item_index: int) -> dict:
             return {"error": f"To-do item #{item_index} not found."}
 
         # Get the sheet ID (numeric) for the To-Do tab
-        meta = svc.spreadsheets().get(spreadsheetId=sheet_id, fields="sheets.properties").execute()
+        meta = await _run(svc.spreadsheets().get(spreadsheetId=sheet_id, fields="sheets.properties").execute)
         todo_sheet_id = None
         for s in meta.get("sheets", []):
             if s["properties"]["title"] == "To-Do":
@@ -370,7 +381,7 @@ async def delete_todo_from_sheet(user_db, item_index: int) -> dict:
 
         if todo_sheet_id is not None:
             # Delete the entire row
-            svc.spreadsheets().batchUpdate(
+            await _run(svc.spreadsheets().batchUpdate(
                 spreadsheetId=sheet_id,
                 body={"requests": [{
                     "deleteDimension": {
@@ -382,7 +393,7 @@ async def delete_todo_from_sheet(user_db, item_index: int) -> dict:
                         }
                     }
                 }]},
-            ).execute()
+            ).execute)
 
         return {"deleted": True, "item_index": item_index, "task": task_name}
 

@@ -76,6 +76,23 @@ def is_strong_match(query: str, contact_name: str) -> bool:
     return q == first
 
 
+def _display_name(name: str, email: str = "") -> str:
+    """Never let a raw email address become the attendee's display name.
+
+    A booking that stored `assignee_name="adhiraj.arora@scaler.com"` produced a
+    second event titled with the address instead of the person, so the same
+    person ended up with two differently-titled events — and the reschedule
+    matcher could not tell them apart. Derive a readable name from the address
+    instead: "adhiraj.arora@scaler.com" -> "Adhiraj Arora".
+    """
+    n = (name or "").strip()
+    if n and "@" not in n:
+        return n
+    local = (n if "@" in n else (email or "")).split("@", 1)[0]
+    parts = [p for p in re.split(r"[._+-]+", local) if p and not p.isdigit()]
+    return " ".join(p.capitalize() for p in parts) or n
+
+
 def _sanitize_title(llm_title: str, attendee_name: str) -> str:
     """Produce a clean event title that won't duplicate "with X".
 
@@ -92,9 +109,17 @@ def _sanitize_title(llm_title: str, attendee_name: str) -> str:
     default = f"Meeting with {attendee_name}"
     if not t:
         return default
+
+    # "pricing with priya" used to be thrown away entirely, losing the topic
+    # the user actually typed. Strip the trailing "with <name>" and keep the
+    # topic instead — discard only if nothing meaningful is left.
     tl = t.lower()
-    if " with " in tl:                              # template-paste artefact
-        return default
+    if " with " in tl:
+        head = t[:tl.index(" with ")].strip(" -–—:,")
+        if not head or head.lower() == "meeting":
+            return default
+        t, tl = head, head.lower()
+
     if attendee_name and attendee_name.lower() in tl:
         return t                                     # LLM already wrote in name
     return f"{t} with {attendee_name}"
@@ -298,10 +323,12 @@ async def propose_meeting(
         "duration_minutes": duration_minutes,
         "start_time": dt.strftime("%a %b %d, %I:%M %p IST"),
         "end_time":   end_dt.strftime("%I:%M %p IST"),
+        # No reminder promise: automatic T-24h/T-1h meeting reminders were
+        # removed, so claiming them here would be a lie the user only
+        # discovers when the reminder never arrives.
         "message": (
             f"confirm — {event_title}, "
-            f"{dt.strftime('%a %b %d, %-I:%M %p')} IST, google meet. "
-            f"reminders at 24h and 1h before. save?"
+            f"{dt.strftime('%a %b %d, %-I:%M %p')} IST, google meet. save?"
         ),
     }
 
@@ -330,6 +357,9 @@ async def create_event_and_notify(
     except (TypeError, ValueError) as e:
         return {"action": "error", "message": f"Bad start_time_iso: {e}"}
 
+    # Normalise before it reaches the title AND the Task row — both used to
+    # inherit a raw email here.
+    name = _display_name(name, email)
     event_title = _sanitize_title(llm_title, name)
     attendees = [email] if email else None
 
@@ -441,7 +471,6 @@ async def create_event_and_notify(
             f"saved. {event_title}.\n"
             f"{time_str}\n"
             f"meet: {meet_link or 'N/A'}"
-            f"\nreminders set for 24h and 1h before."
             f"{suffix}"
         ),
         "attendee_notified": notified,

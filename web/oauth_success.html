@@ -1,28 +1,132 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Connected — FollowUp Bot</title>
-<style>
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-         background:linear-gradient(160deg,#e8f5f0,#f7faf9); color:#1f2d3d; }
-  .card { background:#fff; border-radius:20px; padding:44px 36px; max-width:420px; text-align:center;
-          box-shadow:0 12px 40px rgba(7,94,84,.12); margin:20px; }
-  .check { width:76px; height:76px; border-radius:50%; background:#25D366; color:#fff; font-size:42px;
-           display:flex; align-items:center; justify-content:center; margin:0 auto 18px; }
-  h1 { margin:0 0 8px; font-size:26px; }
-  p { color:#6b7c93; margin:6px 0; }
-  .hint { margin-top:22px; font-size:14px; color:#075E54; font-weight:600; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connected — Araka</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a0a;
+      color: #e8e6e3;
+      overflow: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 50%, rgba(37, 211, 102, 0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .card {
+      position: relative;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 52px 40px;
+      max-width: 440px;
+      width: 90%;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      animation: card-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(24px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .check {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: #25D366;
+      color: #fff;
+      font-size: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      box-shadow: 0 0 40px rgba(37, 211, 102, 0.25);
+      animation: pop 0.5s 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes pop {
+      from { transform: scale(0); }
+      to { transform: scale(1); }
+    }
+    h1 {
+      font-family: "Outfit", "Inter", sans-serif;
+      font-size: 1.6rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 10px;
+      color: #fff;
+    }
+    p {
+      color: rgba(232, 230, 227, 0.6);
+      font-size: 0.92rem;
+      line-height: 1.55;
+      margin: 6px 0;
+    }
+    .services {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin: 24px 0;
+      flex-wrap: wrap;
+    }
+    .service-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      background: rgba(37, 211, 102, 0.08);
+      border: 1px solid rgba(37, 211, 102, 0.15);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #25D366;
+    }
+    .hint {
+      margin-top: 28px;
+      font-size: 0.85rem;
+      color: #25D366;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    .brand {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: "Outfit", "Inter", sans-serif;
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: rgba(255,255,255,0.25);
+    }
+  </style>
 </head>
 <body>
   <div class="card">
+    <div class="brand">araka</div>
     <div class="check">✓</div>
     <h1>Google connected!</h1>
-    <p>📅 Calendar · 📇 Contacts · 🖥 Meet are now linked to FollowUp Bot.</p>
-    <p class="hint">You can close this tab and head back to WhatsApp.</p>
+    <p>Your Google workspace is now linked to Araka.</p>
+    <div class="services">
+      <span class="service-tag">📅 Calendar</span>
+      <span class="service-tag">📇 Contacts</span>
+      <span class="service-tag">🎥 Meet</span>
+    </div>
+    <p class="hint">You can close this tab and head back to WhatsApp ↗</p>
   </div>
 </body>
 </html>

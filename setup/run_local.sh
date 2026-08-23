@@ -37,3 +37,5 @@ fi
 # 5. run
 echo "→ Starting FollowUp Bot on port ${FLASK_PORT:-5000}..."
 exec python -m bot.main
+
+

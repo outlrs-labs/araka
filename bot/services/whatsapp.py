@@ -8,6 +8,7 @@ Wraps the Meta Graph API for:
   - Marking messages as read
 """
 
+import asyncio
 import logging
 import re
 import requests
@@ -15,6 +16,14 @@ import requests
 from bot.config import config
 
 logger = logging.getLogger(__name__)
+
+# Persistent HTTP session — reuses the TLS connection to graph.facebook.com
+# instead of a fresh ~100-300ms handshake on EVERY send. requests.Session is
+# thread-safe for this use (all callers hit the same host).
+_session = requests.Session()
+_session.mount("https://", requests.adapters.HTTPAdapter(
+    pool_connections=4, pool_maxsize=8,
+))
 
 # ── API base ──────────────────────────────────────────────────
 def _base_url() -> str:
@@ -36,7 +45,11 @@ def _headers() -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def send_message(wa_id: str, text: str) -> bool:
-    """Send a plain text WhatsApp message."""
+    """Send a plain text WhatsApp message.
+
+    Synchronous, because APScheduler jobs and the reminder scheduler call it
+    from plain threads. Async callers should use `send_message_async`.
+    """
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -45,6 +58,19 @@ def send_message(wa_id: str, text: str) -> bool:
         "text": {"preview_url": False, "body": text[:4096]},
     }
     return _post(payload)
+
+
+async def send_message_async(wa_id: str, text: str) -> bool:
+    """`send_message` for coroutines — the HTTP round trip runs in a thread.
+
+    The Graph call takes 150-400 ms. Made directly from a coroutine that
+    stalled the one event loop serving every user for its whole duration.
+
+    Deliberately dispatches through the module-level `send_message` rather than
+    calling `_post` directly, so anything that patches `send_message` (the test
+    harness does) still intercepts this path.
+    """
+    return await asyncio.to_thread(send_message, wa_id, text)
 
 
 def send_buttons(wa_id: str, body_text: str, buttons: list) -> bool:
@@ -77,6 +103,11 @@ def send_buttons(wa_id: str, body_text: str, buttons: list) -> bool:
     return _post(payload)
 
 
+async def send_buttons_async(wa_id: str, body_text: str, buttons: list) -> bool:
+    """`send_buttons` for coroutines — see `send_message_async`."""
+    return await asyncio.to_thread(send_buttons, wa_id, body_text, buttons)
+
+
 def send_list(wa_id: str, body_text: str, button_label: str, sections: list) -> bool:
     """Send an interactive list message.
 
@@ -99,6 +130,12 @@ def send_list(wa_id: str, body_text: str, button_label: str, sections: list) -> 
         },
     }
     return _post(payload)
+
+
+async def send_list_async(wa_id: str, body_text: str, button_label: str,
+                          sections: list) -> bool:
+    """`send_list` for coroutines — see `send_message_async`."""
+    return await asyncio.to_thread(send_list, wa_id, body_text, button_label, sections)
 
 
 def send_flow(wa_id: str, body_text: str, flow_id: str, screen: str,
@@ -139,14 +176,20 @@ def send_flow(wa_id: str, body_text: str, flow_id: str, screen: str,
 
 
 def mark_read(wa_id: str, message_id: str) -> None:
-    """Mark an incoming message as read (shows blue ticks)."""
+    """Mark an incoming message as read (blue ticks) + show 'typing…'.
+
+    The typing indicator is the cheapest latency win there is: the user sees
+    the bot typing within ~200ms while the LLM call (~1-3s) runs. It clears
+    automatically when our reply arrives (or after 25s).
+    """
     payload = {
         "messaging_product": "whatsapp",
         "status": "read",
         "message_id": message_id,
+        "typing_indicator": {"type": "text"},
     }
     try:
-        requests.post(
+        _session.post(
             f"{_base_url()}/messages",
             json=payload,
             headers=_headers(),
@@ -189,6 +232,37 @@ def send_template(wa_id: str, template_name: str, language_code: str = "en_US",
         "template": template,
     }
     return _post(payload)
+
+
+def send_reminder_notification(wa_id: str, message: str) -> bool:
+    """Deliver a reminder via the approved utility template.
+
+    Used as a fallback when a free-form reminder is rejected because the user
+    is outside the 24-hour customer-service window. The template has a single
+    body variable {{1}} = the reminder text.
+
+    Returns False (no-op) if WA_REMINDER_TEMPLATE_NAME isn't configured.
+    """
+    template_name = config.WA_REMINDER_TEMPLATE_NAME
+    if not template_name:
+        return False
+    clean_phone = re.sub(r"\D", "", wa_id or "")
+    if not clean_phone:
+        return False
+    components = [{
+        "type": "body",
+        "parameters": [{"type": "text", "text": (message or "").strip() or "You have a reminder."}],
+    }]
+    ok = send_template(
+        clean_phone, template_name,
+        language_code=config.WA_REMINDER_TEMPLATE_LANGUAGE,
+        components=components,
+    )
+    if ok:
+        logger.info(f"Reminder delivered to {clean_phone} via template={template_name!r}")
+    else:
+        logger.warning(f"Reminder template send failed for {clean_phone} (template={template_name!r})")
+    return ok
 
 
 def send_meeting_notification(attendee_phone: str, booker_name: str,
@@ -269,7 +343,7 @@ def download_media(media_id: str) -> bytes:
     """Download a WhatsApp media file and return raw bytes, or empty bytes on error."""
     try:
         # Step 1: Get the temporary download URL
-        url_resp = requests.get(
+        url_resp = _session.get(
             f"https://graph.facebook.com/{config.WA_API_VERSION}/{media_id}",
             headers={"Authorization": f"Bearer {config.WA_ACCESS_TOKEN}"},
             timeout=15,
@@ -303,7 +377,7 @@ def download_media(media_id: str) -> bytes:
 def _post(payload: dict) -> bool:
     """POST a message payload to the WhatsApp messages endpoint."""
     try:
-        resp = requests.post(
+        resp = _session.post(
             f"{_base_url()}/messages",
             json=payload,
             headers=_headers(),

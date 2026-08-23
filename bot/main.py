@@ -13,18 +13,21 @@ import logging
 import os
 import sys
 import threading
+import time
+from collections import deque
 from datetime import timedelta
 from html import escape as html_escape
 
 from flask import Flask, request, jsonify, redirect, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_result
 
 from bot.config import config
-from bot.database import init_db, async_session, User, Task, Reminder, WebhookMessage
+from bot.database import (
+    init_db, async_session, User, Task, Reminder, WebhookMessage, ChatMemory,
+)
 from bot.utils.time import utcnow_naive
-from bot.agent import process_message, get_last_gmeet_result
+from bot.agent import process_message, get_last_agent_action_result
 from bot.services.onboarding import (
     ensure_user, start_onboarding, handle_onboarding_message,
 )
@@ -32,22 +35,23 @@ from bot.services.google_auth import (
     handle_connect, handle_auth_code, handle_disconnect,
     handle_oauth_callback, is_google_connected,
 )
-from bot.services.whatsapp import send_message, send_buttons, mark_read
+from bot.services.whatsapp import (
+    send_message, send_message_async, send_buttons, mark_read,
+)
 from bot.services.transcribe import transcribe_voice
 from bot.handlers.callback_handler import (
     handle_interactive_reply,
-    send_completion_buttons,
     send_connect_button, send_gmeet_contact_picker,
     send_gmeet_email_request, send_gmeet_time_request,
     send_gmeet_conflict_buttons, send_gmeet_confirm_buttons,
     handle_gmeet_text_reply,
     send_gmeet_flow, handle_gmeet_flow_completion,
+    handle_flow_completion,
+    send_calendar_reschedule_confirm_buttons,
+    send_add_attendee_confirm_buttons, send_add_attendee_contact_picker,
+    send_add_attendee_event_picker, send_add_attendee_email_request,
 )
 from bot.services.task_service import (
-    check_draft_timeouts,
-    get_tasks_needing_completion_check, mark_completion_check_sent,
-    check_unconfirmed_timeouts,
-    get_tasks_needing_reminders, mark_reminder_sent,
     clear_conversation_state, get_conversation_state,
 )
 from bot.services import reminder_scheduler
@@ -61,6 +65,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Fail-open guard: without signature enforcement, ANYONE who finds the
+# webhook URL can forge messages as any user. Loud warning, every boot.
+if not (config.WA_APP_SECRET and config.REQUIRE_WA_SIGNATURE):
+    logger.warning(
+        "SECURITY: webhook signature verification is NOT enforced "
+        "(set WA_APP_SECRET and REQUIRE_WA_SIGNATURE=true in .env). "
+        "Forged webhooks will be accepted."
+    )
 
 # Static HTML lives in <project>/web
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
@@ -243,9 +256,39 @@ def handle_webhook():
 # Message Router
 # ═══════════════════════════════════════════════════════════════
 
+# ── Per-user rate limit (P0 abuse guard) ───────────────────────
+# Every message costs an LLM call + Google API quota. A hostile or broken
+# client spamming the webhook must not be able to drain either. Sliding
+# window, in-memory: fine for gunicorn -w1 + single background loop.
+_RATE_LIMIT_MAX = 20          # messages allowed …
+_RATE_LIMIT_WINDOW = 60.0     # … per this many seconds
+_rate_buckets: dict = {}      # wa_id -> deque[monotonic timestamps]
+_rate_notified: dict = {}     # wa_id -> when we last told them to slow down
+
+
+def _rate_limited(wa_id: str) -> bool:
+    """True if this user is over the limit (runs on the single event loop)."""
+    now = time.monotonic()
+    q = _rate_buckets.setdefault(wa_id, deque())
+    while q and now - q[0] > _RATE_LIMIT_WINDOW:
+        q.popleft()
+    if len(q) >= _RATE_LIMIT_MAX:
+        # Tell them once per window, then drop silently.
+        if now - _rate_notified.get(wa_id, 0.0) > _RATE_LIMIT_WINDOW:
+            _rate_notified[wa_id] = now
+            send_message(wa_id, "whoa, that's a lot of messages — give me a minute, then try again.")
+        return True
+    q.append(now)
+    return False
+
+
 async def _process_update(wa_id: str, msg: dict):
     """Process a single incoming message from WhatsApp."""
     msg_type = msg.get("type")
+
+    if _rate_limited(wa_id):
+        logger.warning(f"Rate limit: dropping message from {wa_id}")
+        return
 
     # 1. Get-or-create the user.
     user, is_new = await ensure_user(wa_id)
@@ -283,7 +326,7 @@ async def _process_update(wa_id: str, msg: dict):
             await start_onboarding(wa_id)
             return
         if not user.onboarding_complete:
-            send_message(wa_id, "let's finish the quick setup above first — "
+            await send_message_async(wa_id, "let's finish the quick setup above first — "
                                 "tap a button or type your name.")
             return
         audio_id = msg.get("audio", {}).get("id")
@@ -304,10 +347,10 @@ async def _process_update(wa_id: str, msg: dict):
             reply_id = interactive.get("list_reply", {}).get("id")
             reply_title = interactive.get("list_reply", {}).get("title")
         elif int_type == "nfm_reply":
-            # WhatsApp Flow form submission (native meeting form).
+            # WhatsApp Flow form submission (meeting form OR email form).
             response_json = interactive.get("nfm_reply", {}).get("response_json", "")
             if response_json:
-                await handle_gmeet_flow_completion(wa_id, response_json)
+                await handle_flow_completion(wa_id, response_json)
             return
 
         if reply_id:
@@ -362,7 +405,7 @@ async def _maybe_handle_optout(wa_id: str, text: str) -> bool:
         )
         await session.commit()
 
-    send_message(
+    await send_message_async(
         wa_id,
         "done — you won't get any more meeting reminders from me. "
         "reply *START* anytime to turn them back on.",
@@ -388,7 +431,7 @@ async def _maybe_handle_optin(wa_id: str, text: str) -> bool:
             .values(assignee_unreachable=False)
         )
         await session.commit()
-    send_message(wa_id, "reminders are back on. welcome back.")
+    await send_message_async(wa_id, "reminders are back on. welcome back.")
     return True
 
 
@@ -401,7 +444,7 @@ async def _maybe_handle_data_deletion(wa_id: str, text: str) -> bool:
         return False
 
     from bot.database import (
-        Note, ChatMemory, TaskConversationState, OAuthState,
+        Note, TaskConversationState, OAuthState, ContactCache,
     )
     async with async_session() as session:
         u = (await session.execute(
@@ -410,6 +453,7 @@ async def _maybe_handle_data_deletion(wa_id: str, text: str) -> bool:
         if u:
             await session.execute(sql_delete(Note).where(Note.user_id == u.id))
             await session.execute(sql_delete(ChatMemory).where(ChatMemory.user_id == u.id))
+            await session.execute(sql_delete(ContactCache).where(ContactCache.user_id == u.id))
         await session.execute(sql_delete(Task).where(Task.wa_id == wa_id))
         await session.execute(sql_delete(Reminder).where(Reminder.wa_id == wa_id))
         await session.execute(sql_delete(TaskConversationState).where(TaskConversationState.wa_id == wa_id))
@@ -418,7 +462,7 @@ async def _maybe_handle_data_deletion(wa_id: str, text: str) -> bool:
             await session.delete(u)
         await session.commit()
 
-    send_message(
+    await send_message_async(
         wa_id,
         "done — i've deleted your data (meetings, reminders, notes and "
         "your google link). message me again any time to start fresh.",
@@ -429,18 +473,37 @@ async def _maybe_handle_data_deletion(wa_id: str, text: str) -> bool:
 
 async def _handle_text(wa_id: str, text: str):
     """Handle plain text messages (commands or natural language)."""
-    text_lower = text.lower()
-    
+    text_lower = text.lower().strip()
+    # "/connect" == "connect" — users type slash-commands out of habit; a
+    # missed command falls to the LLM, which then hallucinates fake buttons.
+    cmd = text_lower.lstrip("/!").strip()
+
     # Commands
-    if text_lower == "connect":
+    if cmd == "connect":
         await handle_connect(wa_id)
         return
-    if text_lower == "disconnect":
+    if cmd == "disconnect":
         await handle_disconnect(wa_id)
         return
-    if text_lower == "cancel":
+    if cmd == "cancel":
         await clear_conversation_state(wa_id)
-        send_message(wa_id, "cancelled.")
+        await send_message_async(wa_id, "cancelled.")
+        return
+    if cmd in ("refresh contacts", "refresh my contacts", "sync contacts"):
+        # Manual cache invalidation — wipe + re-warm from Google.
+        from bot.services.contacts import clear_contact_cache, bootstrap_contacts
+        user, _ = await ensure_user(wa_id)
+        await clear_contact_cache(user.id)
+        n = 0
+        try:
+            n = await bootstrap_contacts(wa_id)
+        except Exception as e:
+            logger.warning(f"Contact re-sync failed for {wa_id}: {e}")
+        await send_message_async(
+            wa_id,
+            f"contacts refreshed — {n} synced from google." if n
+            else "contact cache cleared — i'll re-fetch from google as needed.",
+        )
         return
         
     # Check for OAuth redirect URL paste
@@ -452,72 +515,128 @@ async def _handle_text(wa_id: str, text: str):
     if await handle_gmeet_text_reply(wa_id, text, flow_state, flow_ctx):
         return
 
+    # Tier-0 router — strict-pattern turns ("remind me in 20 min to X",
+    # "my reminders") are handled deterministically: no LLM call, no
+    # hallucination surface, near-zero latency. Anything fuzzy falls through.
+    from bot.services.fast_path import try_fast_path
+    fast_reply = await try_fast_path(wa_id, text)
+    if fast_reply:
+        await send_message_async(wa_id, fast_reply)
+        return
+
     # Send to AI Agent
     try:
         response_text = await process_message(wa_id, text)
         
-        # Check if the agent triggered a GMeet workflow that needs interactive UI
-        gmeet_data = get_last_gmeet_result(wa_id)
-        if gmeet_data:
-            action = gmeet_data.get("action")
-            msg = gmeet_data.get("message", response_text)
+        # A structured tool result outranks the model's prose. Every
+        # state-changing calendar tool routes through here so its own
+        # deterministic UI is shown; letting one fall through to free text is
+        # what turns a clear tool result into an invented question.
+        cached = get_last_agent_action_result(wa_id)
+        if cached:
+            tool = cached.get("tool")
+            data = cached.get("data") or {}
+            action = data.get("action")
+            msg = data.get("message", response_text)
 
-            if action == "awaiting_confirmation":
-                # Confirmation gate: bot shows proposed details with Yes/Edit/Cancel.
-                # The event is NOT created until the user taps Yes.
-                await send_gmeet_confirm_buttons(wa_id, gmeet_data)
+            if tool == "set_gmeet":
+                if action == "awaiting_confirmation":
+                    # Confirmation gate: bot shows proposed details with Yes/Edit/Cancel.
+                    # The event is NOT created until the user taps Yes.
+                    await send_gmeet_confirm_buttons(wa_id, data)
+                    return
+                elif action == "conflict":
+                    await send_gmeet_conflict_buttons(wa_id, data)
+                    return
+                elif action == "created":
+                    await send_message_async(wa_id, msg)
+                    return
+                elif action == "pick_contact":
+                    await send_gmeet_contact_picker(wa_id, data)
+                    return
+                elif action in ("need_email", "no_contact"):
+                    # Attendee email missing → native form, prefilled with
+                    # everything already known. Full-info requests never get
+                    # here — they keep the classic conflict-check + confirm.
+                    if config.WA_GMEET_FLOW_ID:
+                        await send_gmeet_flow(wa_id, data)
+                    else:
+                        await send_gmeet_email_request(wa_id, data)
+                    return
+                elif action == "missing_time":
+                    await send_gmeet_time_request(wa_id, data)
+                    return
+                elif action == "error":
+                    await send_message_async(wa_id, msg)
+                    return
+
+            elif tool == "calendar_reschedule":
+                # Previously cached and then dropped on the floor, so the
+                # confirm buttons never appeared and the tap always reported
+                # "expired".
+                if action == "awaiting_calendar_reschedule_confirmation":
+                    await send_calendar_reschedule_confirm_buttons(wa_id, data)
+                    return
+                await send_message_async(wa_id, msg)
                 return
-            elif action == "conflict":
-                await send_gmeet_conflict_buttons(wa_id, gmeet_data)
+
+            elif tool == "calendar_add_attendee":
+                if action == "awaiting_add_attendee_confirmation":
+                    await send_add_attendee_confirm_buttons(wa_id, data)
+                    return
+                elif action == "pick_contact_for_add":
+                    await send_add_attendee_contact_picker(wa_id, data)
+                    return
+                elif action == "choose_event_for_add":
+                    await send_add_attendee_event_picker(wa_id, data)
+                    return
+                elif action in ("need_attendee_email", "need_attendee"):
+                    await send_add_attendee_email_request(wa_id, data)
+                    return
+                await send_message_async(wa_id, msg)
                 return
-            elif action == "created":
-                send_message(wa_id, msg)
+
+            elif tool == "get_meeting_summaries":
+                # Pull path for post-meeting summaries. The card renderer is
+                # deterministic — the model never narrates the summary.
+                from bot.handlers.callback_handler import (
+                    send_meeting_summary_card, send_meeting_summary_picker,
+                )
+                if action == "meeting_summary":
+                    await send_meeting_summary_card(wa_id, data)
+                    return
+                if action == "pick_summary":
+                    await send_meeting_summary_picker(wa_id, data)
+                    return
+                await send_message_async(wa_id, msg)
                 return
-            elif action == "pick_contact":
-                await send_gmeet_contact_picker(wa_id, gmeet_data)
-                return
-            elif action in ("need_email", "no_contact"):
-                # Attendee email missing → native form, prefilled with
-                # everything already known. Full-info requests never get
-                # here — they keep the classic conflict-check + confirm.
-                if config.WA_GMEET_FLOW_ID:
-                    await send_gmeet_flow(wa_id, gmeet_data)
-                else:
-                    await send_gmeet_email_request(wa_id, gmeet_data)
-                return
-            elif action == "missing_time":
-                await send_gmeet_time_request(wa_id, gmeet_data)
-                return
-            elif action == "error":
-                send_message(wa_id, msg)
-                return
-        
+
         # SHOW_CONNECT_BUTTON — safety fallback for Google connection prompt
         if "SHOW_CONNECT_BUTTON" in response_text:
             connected = await is_google_connected(wa_id)
             if connected:
-                send_message(
+                await send_message_async(
                     wa_id,
                     "your google account is connected. "
                     "try asking again — i'll access your calendar now.",
                 )
             else:
                 text_clean = response_text.replace("SHOW_CONNECT_BUTTON", "").strip()
-                send_connect_button(wa_id, text_clean or "connect your google account to get started.")
+                await send_connect_button(wa_id, text_clean or "connect your google account to get started.")
             return
             
-        send_message(wa_id, response_text)
+        await send_message_async(wa_id, response_text)
         
     except Exception as e:
         logger.error(f"Agent processing error: {e}", exc_info=True)
-        send_message(wa_id, "sorry, i ran into an issue processing that.")
+        await send_message_async(wa_id, "sorry, i ran into an issue processing that.")
 
 async def _handle_audio(wa_id: str, audio_id: str):
     """Download audio, transcribe, and process as text."""
     transcript = await transcribe_voice(audio_id)
 
     if not transcript:
-        send_message(wa_id, "sorry, i couldn't understand that audio.")
+        await send_message_async(wa_id, "sorry, i couldn't understand that audio.")
         return
 
     await _handle_text(wa_id, transcript)
@@ -526,137 +645,38 @@ async def _handle_audio(wa_id: str, audio_id: str):
 # Background Jobs
 # ═══════════════════════════════════════════════════════════════
 
-def job_check_drafts():
-    try:
-        count = run_async(check_draft_timeouts())
-        if count > 0:
-            logger.info(f"Cleaned up {count} expired drafts.")
-    except Exception as e:
-        logger.error(f"Draft timeout job error: {e}")
+def job_prune_chat_memory():
+    """Prune chat memory past its 2h TTL — moved OFF the message hot path.
 
-def job_check_unconfirmed():
-    try:
-        count = run_async(check_unconfirmed_timeouts())
-        if count > 0:
-            logger.info(f"Marked {count} tasks as unconfirmed.")
-    except Exception as e:
-        logger.error(f"Unconfirmed timeout job error: {e}")
-
-def job_completion_checks():
-    try:
-        tasks = run_async(get_tasks_needing_completion_check())
-        for t in tasks:
-            msg = f"Hey! How did your '{t.title}' go?"
-            send_completion_buttons(t.wa_id, t.id, msg)
-            run_async(mark_completion_check_sent(t.id))
-            logger.info(f"Sent completion check for task #{t.id}")
-    except Exception as e:
-        logger.error(f"Completion check job error: {e}")
-
-@retry(stop=stop_after_attempt(3),
-       wait=wait_exponential(multiplier=1, min=1, max=8),
-       retry=retry_if_result(lambda ok: ok is False))
-def _send_attempt(wa_id: str, text: str) -> bool:
-    return send_message(wa_id, text)
-
-
-def send_message_retry(wa_id: str, text: str) -> bool:
-    """send_message with up to 3 attempts + exponential backoff (PRD §FR-9)."""
-    try:
-        return _send_attempt(wa_id, text)
-    except Exception:
-        logger.error(f"All reminder send retries failed for {wa_id}")
-        return False
-
-
-async def _notify_assignee_reminder(t, label: str) -> None:
-    """Send the assignee a reminder via the approved template (PRD §FR-9 + §12).
-
-    Free-form messages to an assignee who hasn't messaged us would be
-    blocked by Meta's 24h window, so the assignee path is template-only.
-    Skips opted-out / unreachable assignees.
-    """
-    if t.assignee_unreachable:
-        return
-
-    e164 = t.assignee_phone
-    if t.assignee_id:
-        async with async_session() as session:
-            u = (await session.execute(
-                select(User).where(User.id == t.assignee_id)
-            )).scalar_one_or_none()
-        if not u or u.consent_status == "OPT_OUT":
-            return
-        e164 = u.phone_e164 or t.assignee_phone
-    if not e164:
-        return
-
-    from bot.services.phone import to_wa_id
-    wa = to_wa_id(e164)
-    if not wa:
-        return
-
-    async with async_session() as session:
-        creator = (await session.execute(
-            select(User).where(User.wa_id == t.wa_id)
-        )).scalar_one_or_none()
-    booker = (creator.display_name if creator and creator.display_name else "Your contact")
-
-    when = _format_task_local(t)
-    from bot.services.whatsapp import send_meeting_notification
-    ok = send_meeting_notification(
-        attendee_phone=wa, booker_name=booker,
-        meeting_title=f"{t.title} ({label})",
-        meeting_time=when, meet_link=t.meeting_link or "",
-    )
-    logger.info(f"Assignee reminder for task #{t.id} → sent={ok}")
-
-
-def _format_task_local(t) -> str:
-    from bot.utils.time import to_local_aware
-    try:
-        return to_local_aware(t.scheduled_at).strftime("%a %b %d, %-I:%M %p IST")
-    except Exception:
-        return "soon"
-
-
-def _dispatch_task_reminder(t, label: str, num: int) -> None:
-    # Claim the cycle FIRST so an overlapping/next poll can't re-dispatch and
-    # double-notify the assignee. The retry budget for FR-9 is the 3 in-cycle
-    # attempts in send_message_retry — NOT unbounded cross-poll re-sends.
-    run_async(mark_reminder_sent(t.id, num))
-
-    # Creator — free-form (they're an active user, inside the 24h window).
-    msg = f"reminder: '{t.title}' {label}."
-    if t.mode == "online" and t.meeting_link:
-        msg += f"\nlink: {t.meeting_link}"
-    ok = send_message_retry(t.wa_id, msg)
-    logger.info(f"Creator reminder #{num} for task #{t.id} → sent={ok}")
-
-    # Assignee — template-only, opt-out aware (bilateral, FR-9). Sent exactly
-    # once per cycle regardless of the creator send result.
-    try:
-        run_async(_notify_assignee_reminder(t, label))
-    except Exception as e:
-        logger.warning(f"Assignee reminder error for task #{t.id}: {e}")
-
-
-def job_task_reminders():
-    """Task T-24h / T-1h reminders to BOTH parties (PRD §FR-9).
-
-    Uses polling because task reminders are computed dynamically from
-    `scheduled_at - 24h / 1h` rather than stored as absolute fire times. A
-    5-min poll is fine for a 24h-out reminder. General one-shot reminders
-    use DateTrigger via reminder_scheduler (±1s) and are NOT polled here.
+    process_message enforces the TTL on read (WHERE created_at >= cutoff),
+    so this job is purely storage hygiene and can run coarsely.
     """
     try:
-        n24, n1 = run_async(get_tasks_needing_reminders())
-        for t in n24:
-            _dispatch_task_reminder(t, "is tomorrow", num=1)
-        for t in n1:
-            _dispatch_task_reminder(t, "starts in 1 hour", num=2)
+        async def _prune():
+            cutoff = utcnow_naive() - timedelta(hours=2)
+            async with async_session() as session:
+                await session.execute(
+                    sql_delete(ChatMemory).where(ChatMemory.created_at < cutoff)
+                )
+                await session.commit()
+        run_async(_prune())
     except Exception as e:
-        logger.error(f"Task reminders job error: {e}", exc_info=True)
+        logger.error(f"Chat memory prune error: {e}")
+
+
+def job_meeting_transcripts():
+    """Fetch + summarise transcripts for meetings that just ended.
+
+    Polls rather than subscribes: Google publishes a transcript some minutes
+    after a call ends, and the Workspace Events API would add a Pub/Sub
+    dependency for latency nobody is waiting on. Self-limiting — a meeting
+    with a summary row is never looked at again.
+    """
+    try:
+        from bot.services.meetings import pipeline
+        run_async(pipeline.run_once())
+    except Exception as e:
+        logger.error(f"Meeting transcript job error: {e}")
 
 
 def job_reminders_reconcile():
@@ -700,15 +720,16 @@ def job_reminders_reconcile():
 
 def start_jobs():
     scheduler = BackgroundScheduler(timezone="UTC")
-    scheduler.add_job(job_check_drafts, IntervalTrigger(minutes=30))
-    scheduler.add_job(job_check_unconfirmed, IntervalTrigger(minutes=60))
-    scheduler.add_job(job_completion_checks, IntervalTrigger(minutes=15))
-    # T-24h / T-1h task reminders — coarse polling is fine, they don't need
-    # second-precision and the trigger times are dynamic.
-    scheduler.add_job(job_task_reminders, IntervalTrigger(minutes=5))
-    # General reminders use DateTrigger jobs via reminder_scheduler for
+    # User-requested reminders use DateTrigger jobs via reminder_scheduler for
     # ±1s precision. This is the defense-in-depth reconciliation only.
     scheduler.add_job(job_reminders_reconcile, IntervalTrigger(minutes=5))
+    # Chat-memory TTL cleanup (removed from the per-message hot path).
+    scheduler.add_job(job_prune_chat_memory, IntervalTrigger(minutes=30))
+    # Post-meeting transcripts. Registered ONLY when enabled, so a dormant
+    # feature costs nothing on a 1-vCPU box.
+    if config.MEET_TRANSCRIPTS_ENABLED:
+        scheduler.add_job(job_meeting_transcripts, IntervalTrigger(minutes=10))
+        logger.info("Meeting transcript polling enabled (every 10 min)")
     scheduler.start()
     # Wire the same scheduler instance for one-shot reminder jobs and
     # rehydrate any pending reminders from the DB.

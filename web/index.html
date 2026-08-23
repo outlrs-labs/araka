@@ -1,60 +1,1560 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>FollowUp Bot</title>
-<style>
-  :root { --green:#25D366; --dark:#075E54; --ink:#1f2d3d; --muted:#6b7c93; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-         color:var(--ink); background:linear-gradient(160deg,#f0fdf4,#e8f5f0 60%,#ffffff); min-height:100vh; }
-  .wrap { max-width:680px; margin:0 auto; padding:48px 20px 80px; }
-  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--dark); color:#fff;
-           padding:8px 16px; border-radius:999px; font-weight:600; font-size:14px; }
-  h1 { font-size:40px; margin:24px 0 8px; letter-spacing:-0.5px; }
-  .sub { color:var(--muted); font-size:18px; margin:0 0 32px; }
-  .card { background:#fff; border:1px solid #e3ece8; border-radius:18px; padding:24px; margin:16px 0;
-          box-shadow:0 6px 24px rgba(7,94,84,.06); }
-  .card h2 { margin:0 0 12px; font-size:18px; }
-  .feat { display:flex; gap:12px; align-items:flex-start; margin:10px 0; }
-  .feat .ic { font-size:22px; line-height:1.4; }
-  .status { display:flex; align-items:center; gap:10px; font-weight:600; }
-  .dot { width:10px; height:10px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px rgba(37,211,102,.2); }
-  a.btn { display:inline-block; background:var(--green); color:#fff; text-decoration:none;
-          padding:14px 22px; border-radius:12px; font-weight:700; margin-top:8px; }
-  .foot { color:var(--muted); font-size:13px; text-align:center; margin-top:32px; }
-  .foot a { color:var(--dark); }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Araka — The WhatsApp Scheduling Concierge</title>
+  <meta name="description" content="Araka is a WhatsApp-native scheduling assistant that books meetings, confirms with both parties, sends reminders, and eliminates no-shows. Zero dashboards required." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    /* ═══════════════════════════════════════════
+       Design Tokens
+       ═══════════════════════════════════════════ */
+    :root {
+      --bg-dark: #0a0a0a;
+      --bg-dark-2: #111113;
+      --bg-light: #f8f6f2;
+      --bg-cream: #f5f1ec;
+      --ink: #0e0d0d;
+      --ink-light: #e8e6e3;
+      --muted: rgba(232, 230, 227, 0.65);
+      --muted-dark: rgba(14, 13, 13, 0.55);
+      --green: #25D366;
+      --green-dim: rgba(37, 211, 102, 0.12);
+      --green-glow: rgba(37, 211, 102, 0.25);
+      --accent-purple: #8b5cf6;
+      --accent-blue: #3b82f6;
+      --glass: rgba(255, 255, 255, 0.06);
+      --glass-border: rgba(255, 255, 255, 0.08);
+      --glass-light: rgba(255, 255, 255, 0.85);
+      --glass-light-border: rgba(0, 0, 0, 0.06);
+      --radius: 20px;
+      --radius-sm: 12px;
+      --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-heading: "Outfit", "Inter", sans-serif;
+      --section-gap: 140px;
+      --px: 56px;
+    }
+
+    @media (max-width: 768px) {
+      :root {
+        --section-gap: 80px;
+        --px: 20px;
+      }
+    }
+
+    /* ═══════════════════════════════════════════
+       Reset & Base
+       ═══════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+    body {
+      font-family: var(--font-body);
+      color: var(--ink);
+      background: var(--bg-dark);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    a { text-decoration: none; color: inherit; }
+    img { display: block; max-width: 100%; }
+
+    /* ═══════════════════════════════════════════
+       Scroll Reveal Animation
+       ═══════════════════════════════════════════ */
+    .reveal {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .reveal-delay-1 { transition-delay: 0.1s; }
+    .reveal-delay-2 { transition-delay: 0.2s; }
+    .reveal-delay-3 { transition-delay: 0.3s; }
+    .reveal-delay-4 { transition-delay: 0.4s; }
+    .reveal-delay-5 { transition-delay: 0.5s; }
+
+    /* ═══════════════════════════════════════════
+       Navigation
+       ═══════════════════════════════════════════ */
+    .topbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px var(--px);
+      background: rgba(10, 10, 10, 0.7);
+      backdrop-filter: blur(20px) saturate(1.4);
+      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      transition: background 0.3s;
+    }
+
+    .brand {
+      font-family: var(--font-heading);
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #fff;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 40px;
+    }
+
+    .nav a {
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      transition: color 0.25s;
+    }
+    .nav a:hover { color: #fff; }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .signin {
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: color 0.25s;
+    }
+    .signin:hover { color: #fff; }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      border: none;
+      border-radius: 999px;
+      background: var(--green);
+      color: #fff;
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.3s, background 0.2s;
+      box-shadow: 0 0 24px var(--green-glow);
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 32px var(--green-glow);
+    }
+
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      border-radius: 999px;
+      background: transparent;
+      color: #fff;
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      transition: all 0.25s;
+    }
+    .btn-outline:hover {
+      border-color: rgba(255,255,255,0.5);
+      background: rgba(255,255,255,0.05);
+    }
+
+    /* ═══════════════════════════════════════════
+       Hero Section
+       ═══════════════════════════════════════════ */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      padding: 120px var(--px) 80px;
+      background: var(--bg-dark);
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 80%, rgba(37, 211, 102, 0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 50% at 80% 20%, rgba(139, 92, 246, 0.05) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Animated grid pattern */
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+      -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 80px;
+      align-items: center;
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    .hero-content {
+      max-width: 600px;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      border-radius: 999px;
+      background: var(--green-dim);
+      border: 1px solid rgba(37, 211, 102, 0.2);
+      color: var(--green);
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      margin-bottom: 28px;
+    }
+
+    .hero-badge::before {
+      content: "";
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.4); }
+    }
+
+    .hero h1 {
+      font-family: var(--font-heading);
+      font-size: clamp(2.8rem, 5vw, 4.2rem);
+      font-weight: 800;
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+      color: #fff;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, var(--green), #6ee7b7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: 1.15rem;
+      line-height: 1.7;
+      color: var(--muted);
+      max-width: 500px;
+      margin-bottom: 40px;
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .hero-proof {
+      margin-top: 48px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      color: rgba(255,255,255,0.35);
+      font-size: 0.82rem;
+    }
+    .hero-proof span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* WhatsApp Chat Mockup */
+    .chat-mockup {
+      position: relative;
+      width: 100%;
+      max-width: 380px;
+      justify-self: center;
+    }
+
+    .phone-frame {
+      background: #1a1a1d;
+      border-radius: 36px;
+      border: 2px solid rgba(255,255,255,0.08);
+      padding: 16px 0;
+      box-shadow:
+        0 40px 100px rgba(0,0,0,0.5),
+        0 0 80px rgba(37, 211, 102, 0.08),
+        inset 0 1px 0 rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .phone-notch {
+      width: 120px;
+      height: 28px;
+      background: #0a0a0a;
+      border-radius: 0 0 20px 20px;
+      margin: 0 auto 8px;
+    }
+
+    .wa-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      background: #1f2c34;
+    }
+    .wa-header .avatar {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--green), #128C7E);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.9rem; font-weight: 700; color: #fff;
+    }
+    .wa-header .name {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: #e9edef;
+    }
+    .wa-header .status {
+      font-size: 0.72rem;
+      color: rgba(233,237,239,0.5);
+    }
+
+    .wa-chat {
+      background: #0b141a;
+      background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.015'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      padding: 20px 14px;
+      min-height: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .msg {
+      max-width: 82%;
+      padding: 9px 14px 6px;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      position: relative;
+      opacity: 0;
+      transform: translateY(12px) scale(0.96);
+      animation: msg-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .msg-out {
+      align-self: flex-end;
+      background: #005c4b;
+      color: #e9edef;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg-in {
+      align-self: flex-start;
+      background: #1f2c34;
+      color: #e9edef;
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg .time {
+      display: block;
+      text-align: right;
+      font-size: 0.65rem;
+      color: rgba(233,237,239,0.4);
+      margin-top: 4px;
+    }
+
+    .msg:nth-child(1) { animation-delay: 0.5s; }
+    .msg:nth-child(2) { animation-delay: 1.4s; }
+    .msg:nth-child(3) { animation-delay: 2.4s; }
+    .msg:nth-child(4) { animation-delay: 3.3s; }
+    .msg:nth-child(5) { animation-delay: 4.2s; }
+
+    @keyframes msg-in {
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .wa-input {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #1f2c34;
+    }
+    .wa-input-bar {
+      flex: 1;
+      height: 36px;
+      border-radius: 20px;
+      background: #2a3942;
+      border: none;
+      padding: 0 16px;
+      color: rgba(255,255,255,0.3);
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+    }
+    .wa-input .mic {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--green);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.9rem;
+    }
+
+    /* ═══════════════════════════════════════════
+       Section Helpers
+       ═══════════════════════════════════════════ */
+    .section-light {
+      background: var(--bg-light);
+      color: var(--ink);
+      padding: var(--section-gap) var(--px);
+    }
+
+    .section-dark {
+      background: var(--bg-dark);
+      color: #fff;
+      padding: var(--section-gap) var(--px);
+    }
+
+    .section-cream {
+      background: var(--bg-cream);
+      color: var(--ink);
+      padding: var(--section-gap) var(--px);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--green);
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-family: var(--font-heading);
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -0.035em;
+      margin-bottom: 18px;
+    }
+
+    .section-subtitle {
+      font-size: 1.1rem;
+      line-height: 1.65;
+      max-width: 620px;
+    }
+
+    .section-light .section-subtitle,
+    .section-cream .section-subtitle {
+      color: var(--muted-dark);
+    }
+    .section-dark .section-subtitle {
+      color: var(--muted);
+    }
+
+    /* ═══════════════════════════════════════════
+       How It Works
+       ═══════════════════════════════════════════ */
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+      margin-top: 64px;
+    }
+
+    .step-card {
+      position: relative;
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      padding: 40px 32px;
+      transition: transform 0.3s, border-color 0.3s;
+    }
+    .step-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(37, 211, 102, 0.2);
+    }
+
+    .step-number {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px; height: 48px;
+      border-radius: 14px;
+      background: var(--green-dim);
+      border: 1px solid rgba(37, 211, 102, 0.15);
+      color: var(--green);
+      font-family: var(--font-heading);
+      font-size: 1.2rem;
+      font-weight: 800;
+      margin-bottom: 24px;
+    }
+
+    .step-card h3 {
+      font-family: var(--font-heading);
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+
+    .step-card p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }
+
+    .step-connector {
+      display: none;
+    }
+
+    @media (min-width: 769px) {
+      .step-card:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -24px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.4rem;
+        color: rgba(255,255,255,0.15);
+      }
+    }
+
+    /* ═══════════════════════════════════════════
+       Features Grid
+       ═══════════════════════════════════════════ */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      margin-top: 64px;
+    }
+
+    .feature-card {
+      background: #fff;
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      border-radius: var(--radius);
+      padding: 36px 28px;
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .feature-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--green), transparent);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .feature-card:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+    }
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 22px;
+    }
+
+    .fi-green { background: rgba(37, 211, 102, 0.1); }
+    .fi-blue { background: rgba(59, 130, 246, 0.1); }
+    .fi-purple { background: rgba(139, 92, 246, 0.1); }
+    .fi-amber { background: rgba(245, 158, 11, 0.1); }
+    .fi-rose { background: rgba(244, 63, 94, 0.1); }
+    .fi-teal { background: rgba(20, 184, 166, 0.1); }
+
+    .feature-card h3 {
+      font-family: var(--font-heading);
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: var(--ink);
+    }
+
+    .feature-card p {
+      font-size: 0.9rem;
+      line-height: 1.6;
+      color: var(--muted-dark);
+    }
+
+    /* ═══════════════════════════════════════════
+       Integrations
+       ═══════════════════════════════════════════ */
+    .integrations-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 40px;
+      margin-top: 56px;
+    }
+
+    .int-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 24px 32px;
+      border-radius: var(--radius);
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      transition: all 0.3s;
+      min-width: 140px;
+    }
+    .int-item:hover {
+      border-color: rgba(37, 211, 102, 0.2);
+      transform: translateY(-3px);
+      background: rgba(255,255,255,0.08);
+    }
+
+    .int-icon {
+      width: 48px; height: 48px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem;
+    }
+
+    .int-item span {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    /* ═══════════════════════════════════════════
+       Trust Section
+       ═══════════════════════════════════════════ */
+    .trust-section {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .trust-section::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 60% 50% at 50% 100%, rgba(37, 211, 102, 0.04) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .trust-quote {
+      font-family: var(--font-heading);
+      font-size: clamp(1.6rem, 3vw, 2.6rem);
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -0.03em;
+      text-align: center;
+      max-width: 900px;
+      margin: 0 auto 64px;
+      color: #fff;
+    }
+
+    .trust-quote .em {
+      color: var(--green);
+    }
+
+    .trust-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    .trust-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      padding: 36px 28px;
+      text-align: center;
+      transition: border-color 0.3s;
+    }
+    .trust-card:hover {
+      border-color: rgba(37, 211, 102, 0.15);
+    }
+
+    .trust-card .icon {
+      font-size: 2rem;
+      margin-bottom: 16px;
+    }
+
+    .trust-card h3 {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: #fff;
+    }
+
+    .trust-card p {
+      font-size: 0.88rem;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    /* ═══════════════════════════════════════════
+       Use Cases
+       ═══════════════════════════════════════════ */
+    .usecases-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      margin-top: 64px;
+    }
+
+    .usecase-card {
+      background: #fff;
+      border: 1px solid rgba(0,0,0,0.06);
+      border-radius: var(--radius);
+      padding: 36px 28px;
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .usecase-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.07);
+    }
+
+    .usecase-emoji {
+      font-size: 2.2rem;
+      margin-bottom: 18px;
+    }
+
+    .usecase-card h3 {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: var(--ink);
+    }
+
+    .usecase-card p {
+      font-size: 0.88rem;
+      line-height: 1.6;
+      color: var(--muted-dark);
+    }
+
+    /* ═══════════════════════════════════════════
+       Pricing
+       ═══════════════════════════════════════════ */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px;
+      margin-top: 64px;
+    }
+
+    .price-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+    }
+    .price-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(255,255,255,0.12);
+    }
+
+    .price-card.featured {
+      border-color: var(--green);
+      background: rgba(37, 211, 102, 0.05);
+      box-shadow: 0 0 60px rgba(37, 211, 102, 0.08);
+    }
+
+    .price-badge {
+      position: absolute;
+      top: -12px;
+      right: 24px;
+      padding: 5px 16px;
+      background: var(--green);
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-radius: 999px;
+    }
+
+    .price-card h3 {
+      font-family: var(--font-heading);
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .price-desc {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 24px;
+    }
+
+    .price-amount {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .price-amount .currency {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: rgba(255,255,255,0.5);
+    }
+
+    .price-amount .value {
+      font-family: var(--font-heading);
+      font-size: 3rem;
+      font-weight: 800;
+      color: #fff;
+      line-height: 1;
+    }
+
+    .price-amount .period {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .price-usd {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+
+    .price-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 32px;
+      flex-grow: 1;
+    }
+
+    .price-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .price-features li::before {
+      content: "✓";
+      color: var(--green);
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .price-btn {
+      display: block;
+      text-align: center;
+      padding: 14px;
+      border-radius: 12px;
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.25s;
+    }
+
+    .price-btn-primary {
+      background: var(--green);
+      color: #fff;
+      box-shadow: 0 0 20px var(--green-glow);
+    }
+    .price-btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 30px var(--green-glow);
+    }
+
+    .price-btn-outline {
+      background: transparent;
+      color: #fff;
+      border: 1.5px solid rgba(255,255,255,0.15);
+    }
+    .price-btn-outline:hover {
+      border-color: rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.04);
+    }
+
+    /* ═══════════════════════════════════════════
+       CTA Banner
+       ═══════════════════════════════════════════ */
+    .cta-banner {
+      text-align: center;
+      padding: var(--section-gap) var(--px);
+      background: var(--bg-cream);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta-banner::before {
+      content: "";
+      position: absolute;
+      width: 500px; height: 500px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,211,102,0.08) 0%, transparent 70%);
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    .cta-banner h2 {
+      font-family: var(--font-heading);
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+      margin-bottom: 16px;
+      position: relative;
+    }
+
+    .cta-banner p {
+      font-size: 1.1rem;
+      color: var(--muted-dark);
+      margin-bottom: 36px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+      position: relative;
+    }
+
+    .cta-banner .btn-primary {
+      background: var(--ink);
+      color: #fff;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+      padding: 16px 40px;
+      font-size: 1rem;
+      position: relative;
+    }
+    .cta-banner .btn-primary:hover {
+      box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+    }
+
+    /* ═══════════════════════════════════════════
+       Footer
+       ═══════════════════════════════════════════ */
+    .footer {
+      background: var(--bg-dark);
+      border-top: 1px solid rgba(255,255,255,0.06);
+      padding: 60px var(--px) 36px;
+      color: var(--muted);
+    }
+
+    .footer-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 48px;
+    }
+
+    .footer-brand {
+      font-family: var(--font-heading);
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+
+    .footer-desc {
+      font-size: 0.85rem;
+      line-height: 1.6;
+      max-width: 300px;
+      margin-bottom: 20px;
+    }
+
+    .footer h4 {
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 0.88rem;
+      color: #fff;
+      margin-bottom: 18px;
+    }
+
+    .footer-links {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .footer-links a {
+      font-size: 0.85rem;
+      color: var(--muted);
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: #fff; }
+
+    .footer-bottom {
+      max-width: 1200px;
+      margin: 48px auto 0;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+    }
+
+    .footer-bottom .love {
+      color: var(--muted);
+    }
+
+    /* ═══════════════════════════════════════════
+       Responsive
+       ═══════════════════════════════════════════ */
+    @media (max-width: 960px) {
+      .hero-inner {
+        grid-template-columns: 1fr;
+        gap: 48px;
+      }
+      .chat-mockup { justify-self: center; }
+      .steps-grid,
+      .features-grid,
+      .trust-cards,
+      .usecases-grid,
+      .pricing-grid {
+        grid-template-columns: 1fr;
+        max-width: 480px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .footer-inner {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .nav { display: none; }
+      .topbar { padding: 16px var(--px); }
+      .hero { padding-top: 100px; padding-bottom: 60px; min-height: auto; }
+      .hero h1 { font-size: clamp(2rem, 8vw, 2.8rem); }
+      .hero-subtitle { font-size: 1rem; }
+      .hero-ctas { flex-direction: column; }
+      .hero-ctas a { text-align: center; }
+      .chat-mockup { max-width: 320px; }
+      .integrations-strip { gap: 16px; }
+      .int-item { min-width: 110px; padding: 18px 20px; }
+      .footer-inner { grid-template-columns: 1fr; gap: 32px; }
+      .footer-bottom { flex-direction: column; gap: 12px; text-align: center; }
+    }
+
+    @media (min-width: 769px) and (max-width: 960px) {
+      .features-grid,
+      .usecases-grid {
+        grid-template-columns: repeat(2, 1fr);
+        max-width: 100%;
+      }
+      .steps-grid {
+        grid-template-columns: repeat(3, 1fr);
+        max-width: 100%;
+      }
+    }
+  </style>
 </head>
 <body>
-  <div class="wrap">
-    <span class="badge">🟢 FollowUp Bot</span>
-    <h1>Your commitments, kept.</h1>
-    <p class="sub">A WhatsApp-native assistant that schedules meetings, sends reminders to everyone involved, and follows up so nothing slips.</p>
 
-    <div class="card">
-      <div class="status"><span class="dot"></span> Service is running</div>
+  <!-- ════════════ Navigation ════════════ -->
+  <header class="topbar" id="topbar" aria-label="Main navigation">
+    <a class="brand" href="#">araka</a>
+    <nav class="nav" aria-label="Global navigation">
+      <a href="#how-it-works">How It Works</a>
+      <a href="#features">Features</a>
+      <a href="#integrations">Integrations</a>
+      <a href="#use-cases">Use Cases</a>
+      <a href="#pricing">Pricing</a>
+    </nav>
+    <div class="actions">
+      <a class="signin" href="#">Sign in</a>
+      <a class="btn-primary" href="#pricing" id="cta-topbar">Get Started</a>
     </div>
+  </header>
 
-    <div class="card">
-      <h2>What it does</h2>
-      <div class="feat"><span class="ic">🗓️</span><div><b>Schedule meetings</b><br/>“Meet Priya tomorrow 4 PM” → contact lookup, Google Meet link, calendar invite.</div></div>
-      <div class="feat"><span class="ic">🤝</span><div><b>Loops in the other person</b><br/>Sends the attendee a WhatsApp invite and reminders — with a one-tap opt-out.</div></div>
-      <div class="feat"><span class="ic">⏰</span><div><b>Reminds both sides</b><br/>Nudges at 24 hours and 1 hour before, then checks it actually happened.</div></div>
-      <div class="feat"><span class="ic">📝</span><div><b>Notes, reminders & to-dos</b><br/>Quick capture in plain language, even by voice note.</div></div>
+  <!-- ════════════ Hero ════════════ -->
+  <section class="hero" id="hero">
+    <div class="hero-inner">
+      <div class="hero-content">
+        <div class="hero-badge">WhatsApp-Native AI Assistant</div>
+        <h1>
+          The scheduling concierge that gets
+          <span class="highlight">both people</span> to show up
+        </h1>
+        <p class="hero-subtitle">
+          Text naturally on WhatsApp. Araka checks your calendar, books the meeting,
+          confirms with both you and the other person, and sends reminders.
+          Zero dashboards. Zero no-shows.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn-primary" href="#pricing" id="cta-hero-start">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" fill="currentColor"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.955 9.955 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+            Start Free on WhatsApp
+          </a>
+          <a class="btn-outline" href="#how-it-works" id="cta-hero-demo">See How It Works</a>
+        </div>
+        <div class="hero-proof">
+          <span>🔒 End-to-end secure</span>
+          <span>⚡ Instant replies</span>
+          <span>🇮🇳 Made in India</span>
+        </div>
+      </div>
+
+      <!-- WhatsApp Chat Mockup -->
+      <div class="chat-mockup" aria-hidden="true">
+        <div class="phone-frame">
+          <div class="phone-notch"></div>
+          <div class="wa-header">
+            <div class="avatar">A</div>
+            <div>
+              <div class="name">Araka</div>
+              <div class="status">online</div>
+            </div>
+          </div>
+          <div class="wa-chat">
+            <div class="msg msg-out">
+              Set up a call with Priya tomorrow at 3
+              <span class="time">3:21 PM</span>
+            </div>
+            <div class="msg msg-in">
+              Found Priya Sharma in your contacts. Tomorrow 3 PM is free on your calendar. Shall I book it? ✅
+              <span class="time">3:21 PM</span>
+            </div>
+            <div class="msg msg-out">
+              Yes, confirm
+              <span class="time">3:22 PM</span>
+            </div>
+            <div class="msg msg-in">
+              Done! 🎉 Google Meet created for tomorrow 3 PM. I've also notified Priya — she'll get a confirmation on WhatsApp.
+              <span class="time">3:22 PM</span>
+            </div>
+            <div class="msg msg-in">
+              Both of you will get a reminder 30 minutes before. Anything else?
+              <span class="time">3:22 PM</span>
+            </div>
+          </div>
+          <div class="wa-input">
+            <div class="wa-input-bar">Type a message</div>
+            <div class="mic">🎙</div>
+          </div>
+        </div>
+      </div>
     </div>
+  </section>
 
-    <div class="card">
-      <h2>Get started</h2>
-      <p style="color:var(--muted);margin:0 0 4px">Message the bot on WhatsApp to begin onboarding.</p>
-      <a class="btn" href="/privacy">Read our privacy commitment →</a>
+  <!-- ════════════ How It Works ════════════ -->
+  <section class="section-dark" id="how-it-works">
+    <div class="container">
+      <div class="section-label reveal">● How It Works</div>
+      <h2 class="section-title reveal reveal-delay-1">
+        Three messages.<br />Meeting booked for both of you.
+      </h2>
+      <p class="section-subtitle reveal reveal-delay-2">
+        No apps to install, no dashboards to learn. Just text Araka like you'd text a friend.
+      </p>
+
+      <div class="steps-grid">
+        <div class="step-card reveal reveal-delay-1">
+          <div class="step-number">1</div>
+          <h3>Text naturally</h3>
+          <p>"Set up a call with Priya tomorrow at 3" — Araka understands natural language, resolves contacts from Google, and checks your calendar for conflicts.</p>
+        </div>
+        <div class="step-card reveal reveal-delay-2">
+          <div class="step-number">2</div>
+          <h3>Confirm with a tap</h3>
+          <p>Araka shows you the details and waits for your explicit confirmation. It never books, cancels, or invents a time unilaterally. You're always in control.</p>
+        </div>
+        <div class="step-card reveal reveal-delay-3">
+          <div class="step-number">3</div>
+          <h3>Both sides notified</h3>
+          <p>A Google Meet is created, and the other person gets a WhatsApp confirmation too — with their own reminders. Both of you show up. That's it.</p>
+        </div>
+      </div>
     </div>
+  </section>
 
-    <p class="foot">
-      © FollowUp Bot · <a href="/privacy">Privacy</a> · <a href="/health">Status</a><br/>
-      Questions? <a href="mailto:team@forzasport.in">team@forzasport.in</a>
-    </p>
-  </div>
+  <!-- ════════════ Features ════════════ -->
+  <section class="section-light" id="features">
+    <div class="container">
+      <div class="section-label reveal">● Features</div>
+      <h2 class="section-title reveal reveal-delay-1">
+        Everything you need.<br />Nothing you don't.
+      </h2>
+      <p class="section-subtitle reveal reveal-delay-2">
+        A focused, reliable toolkit for scheduling and follow-ups — not a bloated general-purpose chatbot.
+      </p>
+
+      <div class="features-grid">
+        <div class="feature-card reveal reveal-delay-1">
+          <div class="feature-icon fi-green">📅</div>
+          <h3>Smart Scheduling</h3>
+          <p>Book meetings with natural language. Araka checks conflicts, finds free slots, and creates Google Calendar events with Meet links — automatically.</p>
+        </div>
+        <div class="feature-card reveal reveal-delay-2">
+          <div class="feature-icon fi-purple">👥</div>
+          <h3>Bilateral Coordination</h3>
+          <p>The other person gets a WhatsApp confirmation and reminders too. Both sides show up — that's the game-changer no other assistant offers.</p>
+        </div>
+        <div class="feature-card reveal reveal-delay-3">
+          <div class="feature-icon fi-blue">🔔</div>
+          <h3>Smart Reminders</h3>
+          <p>Set one-off or recurring reminders with natural language. "Remind me to call Harsh every Monday at 9 AM" — and it just works, reliably.</p>
+        </div>
+        <div class="feature-card reveal reveal-delay-1">
+          <div class="feature-icon fi-amber">✉️</div>
+          <h3>Email from Chat</h3>
+          <p>Search your Gmail and send emails without leaving WhatsApp. Your email content never touches the AI — privacy by design.</p>
+        </div>
+        <div class="feature-card reveal reveal-delay-2">
+          <div class="feature-icon fi-rose">📝</div>
+          <h3>Notes & To-dos</h3>
+          <p>Capture quick notes and manage to-do lists backed by Google Sheets. Access them anytime, right from WhatsApp.</p>
+        </div>
+        <div class="feature-card reveal reveal-delay-3">
+          <div class="feature-icon fi-teal">🎤</div>
+          <h3>Voice Messages</h3>
+          <p>Send a voice note instead of typing. Araka transcribes it instantly and acts on your request — perfect for when you're on the go.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Integrations ════════════ -->
+  <section class="section-dark" id="integrations">
+    <div class="container" style="text-align: center;">
+      <div class="section-label reveal">● Integrations</div>
+      <h2 class="section-title reveal reveal-delay-1">
+        Plugs into the tools you already use
+      </h2>
+      <p class="section-subtitle reveal reveal-delay-2" style="margin-left: auto; margin-right: auto;">
+        Araka connects to your Google workspace seamlessly — calendar, contacts, email, and more.
+      </p>
+
+      <div class="integrations-strip reveal reveal-delay-3">
+        <div class="int-item">
+          <div class="int-icon">📅</div>
+          <span>Google Calendar</span>
+        </div>
+        <div class="int-item">
+          <div class="int-icon">🎥</div>
+          <span>Google Meet</span>
+        </div>
+        <div class="int-item">
+          <div class="int-icon">📇</div>
+          <span>Google Contacts</span>
+        </div>
+        <div class="int-item">
+          <div class="int-icon">✉️</div>
+          <span>Gmail</span>
+        </div>
+        <div class="int-item">
+          <div class="int-icon">📊</div>
+          <span>Google Sheets</span>
+        </div>
+        <div class="int-item">
+          <div class="int-icon" style="color: var(--green);">💬</div>
+          <span>WhatsApp</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Trust ════════════ -->
+  <section class="section-dark trust-section" id="trust">
+    <div class="container">
+      <p class="trust-quote reveal">
+        "Araka <span class="em">never invents a time</span>. Never double-books.
+        <span class="em">Always confirms</span> before booking."
+      </p>
+
+      <div class="trust-cards">
+        <div class="trust-card reveal reveal-delay-1">
+          <div class="icon">🛡️</div>
+          <h3>Confirmation Gates</h3>
+          <p>Every booking requires your explicit tap. The AI never takes an irreversible action without your approval first.</p>
+        </div>
+        <div class="trust-card reveal reveal-delay-2">
+          <div class="icon">🧠</div>
+          <h3>Anti-Hallucination Guards</h3>
+          <p>The server rejects any clock time the user didn't literally type. Deterministic logic, not probabilistic guesses.</p>
+        </div>
+        <div class="trust-card reveal reveal-delay-3">
+          <div class="icon">🔐</div>
+          <h3>Privacy by Design</h3>
+          <p>Email compose goes through a secure form — the AI never sees your email content. Google tokens are encrypted at rest.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Use Cases ════════════ -->
+  <section class="section-cream" id="use-cases">
+    <div class="container">
+      <div class="section-label reveal" style="color: var(--ink);">● Who It's For</div>
+      <h2 class="section-title reveal reveal-delay-1">
+        Built for people who schedule<br />with other people
+      </h2>
+      <p class="section-subtitle reveal reveal-delay-2">
+        If no-shows cost you time, money, or trust — Araka pays for itself on the first week.
+      </p>
+
+      <div class="usecases-grid">
+        <div class="usecase-card reveal reveal-delay-1">
+          <div class="usecase-emoji">💼</div>
+          <h3>Founders & Freelancers</h3>
+          <p>Book calls with clients and partners over WhatsApp. No more "are we still on?" messages — Araka handles the follow-up for both sides.</p>
+        </div>
+        <div class="usecase-card reveal reveal-delay-2">
+          <div class="usecase-emoji">🏥</div>
+          <h3>Clinics & Healthcare</h3>
+          <p>Automatic patient appointment confirmations and reminders on WhatsApp. Reduce no-shows by reminding patients before every visit.</p>
+        </div>
+        <div class="usecase-card reveal reveal-delay-3">
+          <div class="usecase-emoji">💇</div>
+          <h3>Salons & Spas</h3>
+          <p>Clients get WhatsApp reminders before their appointments. No custom app needed — just message Araka to book and it handles the rest.</p>
+        </div>
+        <div class="usecase-card reveal reveal-delay-1">
+          <div class="usecase-emoji">📚</div>
+          <h3>Tutors & Coaching Centers</h3>
+          <p>Schedule classes and remind parents automatically. "Remind me to follow up with parent group every Friday" — done.</p>
+        </div>
+        <div class="usecase-card reveal reveal-delay-2">
+          <div class="usecase-emoji">🏠</div>
+          <h3>Real Estate Brokers</h3>
+          <p>Site visits, client meetings, follow-ups — all coordinated through WhatsApp. No-shows on property tours cost real money.</p>
+        </div>
+        <div class="usecase-card reveal reveal-delay-3">
+          <div class="usecase-emoji">👥</div>
+          <h3>Small Teams</h3>
+          <p>Sales teams, recruiters, consultants — anyone who books meetings with external people and needs both sides to actually show up.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Pricing ════════════ -->
+  <section class="section-dark" id="pricing">
+    <div class="container" style="text-align: center;">
+      <div class="section-label reveal">● Pricing</div>
+      <h2 class="section-title reveal reveal-delay-1">
+        Simple, honest pricing
+      </h2>
+      <p class="section-subtitle reveal reveal-delay-2" style="margin-left: auto; margin-right: auto;">
+        Start free. Upgrade when you need more. No hidden fees, no surprise charges.
+      </p>
+
+      <div class="pricing-grid" style="text-align: left;">
+        <!-- Free -->
+        <div class="price-card reveal reveal-delay-1">
+          <h3>Free</h3>
+          <p class="price-desc">Perfect for trying out Araka</p>
+          <div class="price-amount">
+            <span class="currency">₹</span>
+            <span class="value">0</span>
+            <span class="period">/month</span>
+          </div>
+          <p class="price-usd">Free forever</p>
+          <ul class="price-features">
+            <li>Meetings per month with limits</li>
+            <li>Google Calendar & Meet</li>
+            <li>Smart reminders</li>
+            <li>Notes & to-dos</li>
+            <li>Voice message support</li>
+          </ul>
+          <a class="price-btn price-btn-outline" href="#" id="cta-free">Get Started Free</a>
+        </div>
+        <!-- Pro -->
+        <div class="price-card featured reveal reveal-delay-2">
+          <span class="price-badge">Most Popular</span>
+          <h3>Pro</h3>
+          <p class="price-desc">For professionals who schedule a lot</p>
+          <div class="price-amount">
+            <span class="currency">₹</span>
+            <span class="value">199</span>
+            <span class="period">/month</span>
+          </div>
+          <p class="price-usd">~$5 USD</p>
+          <ul class="price-features">
+            <li>Unlimited meetings & reminders</li>
+            <li>Bilateral coordination</li>
+            <li>Gmail search & send</li>
+            <li>Contact resolution</li>
+            <li>Priority support</li>
+          </ul>
+          <a class="price-btn price-btn-primary" href="#" id="cta-pro">Start Pro Trial</a>
+        </div>
+        <!-- Business -->
+        <div class="price-card reveal reveal-delay-3">
+          <h3>Business</h3>
+          <p class="price-desc">For clinics, salons, and SMBs</p>
+          <div class="price-amount">
+            <span class="currency">₹</span>
+            <span class="value">2,500</span>
+            <span class="period">/month</span>
+          </div>
+          <p class="price-usd">~$30 USD</p>
+          <ul class="price-features">
+            <li>Everything in Pro</li>
+            <li>Multi-seat team access</li>
+            <li>Branded notifications</li>
+            <li>No-show analytics</li>
+            <li>Dedicated onboarding</li>
+          </ul>
+          <a class="price-btn price-btn-outline" href="#" id="cta-business">Contact Sales</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ CTA Banner ════════════ -->
+  <section class="cta-banner">
+    <div class="container reveal">
+      <h2>Ready to eliminate no-shows?</h2>
+      <p>Start scheduling on WhatsApp in under 2 minutes. Free, no credit card required.</p>
+      <a class="btn-primary" href="#" id="cta-bottom">
+        Start Free on WhatsApp →
+      </a>
+    </div>
+  </section>
+
+  <!-- ════════════ Footer ════════════ -->
+  <footer class="footer" id="footer">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-brand">araka</div>
+        <p class="footer-desc">
+          The WhatsApp scheduling concierge that gets both people to show up — confirmations, reminders, and reschedules handled for you and the person you're meeting.
+        </p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul class="footer-links">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#integrations">Integrations</a></li>
+          <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#how-it-works">How It Works</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Use Cases</h4>
+        <ul class="footer-links">
+          <li><a href="#use-cases">Clinics & Healthcare</a></li>
+          <li><a href="#use-cases">Salons & Spas</a></li>
+          <li><a href="#use-cases">Tutors & Coaching</a></li>
+          <li><a href="#use-cases">Real Estate</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul class="footer-links">
+          <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/terms">Terms & Conditions</a></li>
+          <li><a href="mailto:team@forzasport.in">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Araka. All rights reserved.</span>
+      <span class="love">Made with ❤️ in India</span>
+    </div>
+  </footer>
+
+  <!-- ════════════ Scroll Reveal Script ════════════ -->
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // Intersection Observer for scroll reveals
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("visible");
+            }
+          });
+        },
+        { threshold: 0.12, rootMargin: "0px 0px -40px 0px" }
+      );
+
+      document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+
+      // Smooth scroll for nav links
+      document.querySelectorAll('a[href^="#"]').forEach((link) => {
+        link.addEventListener("click", (e) => {
+          const target = document.querySelector(link.getAttribute("href"));
+          if (target) {
+            e.preventDefault();
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      });
+
+      // Navbar background on scroll
+      const topbar = document.getElementById("topbar");
+      let lastScroll = 0;
+      window.addEventListener("scroll", () => {
+        const scrollY = window.scrollY;
+        if (scrollY > 60) {
+          topbar.style.background = "rgba(10, 10, 10, 0.92)";
+        } else {
+          topbar.style.background = "rgba(10, 10, 10, 0.7)";
+        }
+        lastScroll = scrollY;
+      }, { passive: true });
+    });
+  </script>
 </body>
 </html>

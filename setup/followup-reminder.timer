@@ -1,0 +1,13 @@
+[Unit]
+Description=Run araka reminder reconcile every minute (external heartbeat)
+
+[Timer]
+# First run 60s after boot, then every 60s after the previous run started.
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10s
+# Catch up immediately if the machine was asleep/off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

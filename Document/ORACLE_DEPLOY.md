@@ -5,7 +5,7 @@ Hardened, $0 deployment of FollowUp Bot on an Oracle Cloud "Always Free"
 tunnels. Free *forever*: Always Free VM + Caddy + Let's Encrypt + sslip.io.
 
 > **Ubuntu variant** — login user `ubuntu`, package manager `apt`, firewall
-> `ufw`. Your instance IP: **`129.159.235.161`**.
+> `ufw`. Your instance IP: **`140.245.193.44`**.
 
 **Architecture**
 ```
@@ -27,14 +27,14 @@ Commands are labelled **🌐 console** / **💻 Mac** / **🖥️ VM**. Fill in 
 
 ## 0. Concepts (60 seconds)
 
-- **Public IP** — your VM's internet address (`129.159.235.161`). Find it:
+- **Public IP** — your VM's internet address (`140.245.193.44`). Find it:
   Console → Compute → Instances → your instance, or `curl ifconfig.me` on the VM.
 - **Ephemeral vs Reserved** — ephemeral changes if you recreate the VM;
   **reserved is static**. Reserve it (Part 3) so the webhook URL is permanent.
 - **Two firewalls** — Oracle blocks ports in the *cloud* (VCN Security List)
   **and** in the *VM* (`ufw`). Both must allow 80/443 (Part 4).
 - **No domain needed** — `sslip.io` turns your IP into a hostname
-  `129-159-235-161.sslip.io` with zero signup, so Let's Encrypt can issue a cert.
+  `140-245-193-44.sslip.io` with zero signup, so Let's Encrypt can issue a cert.
 
 ---
 
@@ -54,7 +54,7 @@ oracle.com/cloud/free → card for identity check only. Home region near you
 
 ## 3. Reserve a static public IP (production)
 🌐 Console → your instance → *Resources → Attached VNICs* → primary VNIC →
-*IPv4 Addresses* → the public IP `129.159.235.161` → **Edit → Reserved**. Now
+*IPv4 Addresses* → the public IP `140.245.193.44` → **Edit → Reserved**. Now
 it never changes.
 
 ## 4. Open the firewall — BOTH layers
@@ -79,12 +79,12 @@ sudo ufw status
 💻 **Mac** — connect as `ubuntu`:
 ```bash
 chmod 600 ~/Downloads/<KEY_FILE>
-ssh -i ~/Downloads/<KEY_FILE> ubuntu@129.159.235.161
+ssh -i ~/Downloads/<KEY_FILE> ubuntu@140.245.193.44
 ```
 
 🖥️ **VM** — patch, harden:
 ```bash
-export IP=129.159.235.161
+export IP=140.245.193.44
 
 # Patches + runtime + tools
 sudo apt update && sudo apt upgrade -y
@@ -125,7 +125,7 @@ rsync -avz \
   --exclude 'venv' --exclude '*.db' --exclude '*.db-*' \
   --exclude '__pycache__' --exclude '.git' --exclude '.DS_Store' \
   -e "ssh -i ~/Downloads/<KEY_FILE>" \
-  ./ ubuntu@129.159.235.161:/home/ubuntu/followup-bot/
+  ./ ubuntu@140.245.193.44:/home/ubuntu/followup-bot/
 ```
 
 ## 7. Install + run as a hardened service
@@ -181,7 +181,7 @@ echo "PUBLIC URL → https://${HOST}"
 curl -s https://${HOST}/health
 ```
 Expect `{"status":"ok",...}`. For your IP the URL is
-**`https://129-159-235-161.sslip.io`**. Caddy renews the cert forever.
+**`https://140-245-193-44.sslip.io`**. Caddy renews the cert forever.
 
 ## 9. Production hygiene — backups + watchdog
 
@@ -200,14 +200,14 @@ recovery.
 ## 10. Connect WhatsApp + Google
 
 1. 🌐 Meta dashboard → WhatsApp → Configuration:
-   - Callback URL: `https://129-159-235-161.sslip.io/webhook`
+   - Callback URL: `https://140-245-193-44.sslip.io/webhook`
    - Verify token: your `WA_VERIFY_TOKEN`
    - Subscribe to **messages**.
 2. **Google:** paste flow — keep `http://localhost` in the OAuth client's
    redirect URIs. `BASE_URL` stays blank.
 
 ## 11. Verify
-- `https://129-159-235-161.sslip.io/health` → ok.
+- `https://140-245-193-44.sslip.io/health` → ok.
 - WhatsApp → bot onboards.
 - `connect` → tap Google link → sign in → paste `http://localhost/?code=...`
   back → connected.

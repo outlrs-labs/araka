@@ -1,0 +1,12 @@
+[Unit]
+Description=araka reminder reconcile (external heartbeat)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/followup-bot
+ExecStart=/home/ubuntu/followup-bot/venv/bin/python /home/ubuntu/followup-bot/reconcile_reminders.py
+# Don't let a slow run pile up; the timer re-fires on its own cadence.
+TimeoutStartSec=50

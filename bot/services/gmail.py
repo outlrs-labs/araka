@@ -1,9 +1,10 @@
-"""Gmail read helpers for answering email questions."""
+"""Gmail helpers — read (for email questions) and send (from the Flow form)."""
 
 import base64
 import html
 import logging
 import re
+from email.mime.text import MIMEText
 from email.utils import parsedate_to_datetime
 
 from googleapiclient.discovery import build
@@ -11,7 +12,11 @@ from googleapiclient.errors import HttpError
 
 from bot.services.google_auth import get_google_creds
 
+from bot.utils.aio import offloaded
+
 logger = logging.getLogger(__name__)
+
+_EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
 
 
 class GmailScopeError(Exception):
@@ -119,7 +124,8 @@ def _is_scope_error(exc: Exception) -> bool:
     )
 
 
-async def search_messages(
+@offloaded
+def search_messages(
     user_db,
     query: str = "",
     max_results: int = 5,
@@ -130,7 +136,9 @@ async def search_messages(
     if not svc:
         raise Exception("Google not connected")
 
-    max_results = max(1, min(int(max_results or 5), 10))
+    # Ceiling raised from 10: a week-long summary legitimately needs more than
+    # ten messages, and the caller already sizes its request by payload type.
+    max_results = max(1, min(int(max_results or 5), 40))
     try:
         result = svc.users().messages().list(
             userId="me",
@@ -151,4 +159,151 @@ async def search_messages(
         if _is_scope_error(e):
             raise GmailScopeError("Missing Gmail readonly permission") from e
         logger.error(f"Gmail search failed: {e}", exc_info=True)
+        raise
+
+
+def _parse_address(header: str) -> tuple[str, str]:
+    """Split a From/To header into (display name, address).
+
+    Handles the three shapes Gmail emits:
+        "Muskaan Jain (Unstop)" <muskaan@unstop.com>
+        Muskaan Jain <muskaan@unstop.com>
+        muskaan@unstop.com
+    """
+    raw = (header or "").strip()
+    if not raw:
+        return "", ""
+    match = re.search(r"<([^<>]+)>", raw)
+    if match:
+        addr = match.group(1).strip()
+        name = raw[:match.start()].strip().strip('"').strip()
+    else:
+        addr = raw
+        name = ""
+    if not is_valid_email(addr):
+        return "", ""
+    if not name:
+        # "muskaan.jain@x.com" -> "Muskaan Jain", so the picker shows a
+        # person rather than a raw address.
+        local = addr.split("@", 1)[0]
+        parts = [p for p in re.split(r"[._+-]+", local) if p and not p.isdigit()]
+        name = " ".join(p.capitalize() for p in parts)
+    return name, addr
+
+
+@offloaded
+def find_people_in_mail(user_db, name: str, max_results: int = 12) -> list[dict]:
+    """Find someone by name in Gmail message headers.
+
+    The People API only knows SAVED contacts and "Other contacts" — and Google
+    populates Other contacts from people the user has EMAILED, not from people
+    who merely emailed them. So a sender the user never replied to is invisible
+    to both, even though their address is sitting in the inbox. That is why
+    "what's Muskaan Jain's email?" failed seconds after araka had summarised a
+    message from her.
+
+    Searches From AND To so it works for both inbound senders and outbound
+    recipients, and returns the same {name, emails, phones} shape the contact
+    cache uses, so callers can treat it as just another contact source.
+    """
+    svc = _get_service(user_db)
+    if not svc:
+        raise Exception("Google not connected")
+
+    query = (name or "").strip()
+    if not query:
+        return []
+
+    try:
+        result = svc.users().messages().list(
+            userId="me",
+            q=f'from:("{query}") OR to:("{query}")',
+            maxResults=max(1, min(int(max_results or 12), 25)),
+        ).execute()
+    except Exception as e:
+        if _is_scope_error(e):
+            raise GmailScopeError("Missing Gmail readonly permission") from e
+        logger.warning(f"Gmail people lookup failed for {query!r}: {e}")
+        return []
+
+    refs = result.get("messages") or []
+    needle = query.lower()
+    by_addr: dict[str, dict] = {}
+
+    for ref in refs:
+        try:
+            msg = svc.users().messages().get(
+                userId="me", id=ref["id"], format="metadata",
+                metadataHeaders=["From", "To"],
+            ).execute()
+        except Exception:
+            continue
+        payload = msg.get("payload") or {}
+        for header in ("From", "To"):
+            # A To: header can carry several recipients.
+            for chunk in (_header(payload, header) or "").split(","):
+                person, addr = _parse_address(chunk)
+                if not addr:
+                    continue
+                # Gmail matches the query loosely across the whole message, so
+                # confirm the name really belongs to THIS address before
+                # offering it as a resolution.
+                haystack = f"{person} {addr}".lower()
+                if not all(tok in haystack for tok in needle.split()):
+                    continue
+                existing = by_addr.get(addr.lower())
+                if existing is None or (not existing["name"] and person):
+                    by_addr[addr.lower()] = {
+                        "name": person or addr, "emails": [addr], "phones": [],
+                    }
+    return list(by_addr.values())
+
+
+def is_valid_email(addr: str) -> bool:
+    """Light server-side check; the Flow already validates input-type=email."""
+    return bool(_EMAIL_RE.match((addr or "").strip()))
+
+
+@offloaded
+def send_email(user_db, to: str, subject: str, body: str) -> dict:
+    """Send a plain-text email AS the connected user (gmail.send scope).
+
+    Privacy contract: `subject` and `body` are passed through verbatim from
+    the WhatsApp Flow form. No AI/LLM touches them. The message is sent from
+    the user's own Gmail address (userId="me" → Gmail fills the From header).
+
+    Returns {"ok": True, "id", "to"} on success.
+    Raises GmailScopeError if the token lacks gmail.send; ValueError on bad
+    input; Exception on transport/API failure.
+    """
+    to = (to or "").strip()
+    # Strip CR/LF from the single-line headers to prevent header injection and
+    # to avoid a confusing serialize error if the user pastes a multi-line
+    # value into Subject. (Body keeps its newlines — they're content.)
+    subject = re.sub(r"[\r\n]+", " ", (subject or "").strip())
+    body = body or ""
+
+    if not is_valid_email(to):
+        raise ValueError("invalid recipient email")
+    if not body.strip():
+        raise ValueError("empty body")
+
+    svc = _get_service(user_db)
+    if not svc:
+        raise Exception("Google not connected")
+
+    mime = MIMEText(body, "plain", "utf-8")
+    mime["to"] = to
+    mime["subject"] = subject or "(no subject)"
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+
+    try:
+        sent = svc.users().messages().send(
+            userId="me", body={"raw": raw},
+        ).execute()
+        return {"ok": True, "id": sent.get("id", ""), "to": to}
+    except Exception as e:
+        if _is_scope_error(e):
+            raise GmailScopeError("Missing Gmail send permission") from e
+        logger.error(f"Gmail send failed: {e}", exc_info=True)
         raise

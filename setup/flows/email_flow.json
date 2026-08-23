@@ -1,0 +1,65 @@
+{
+    "version": "7.3",
+    "screens": [
+        {
+            "id": "COMPOSE",
+            "title": "Send email",
+            "terminal": true,
+            "data": {
+                "to_init": {
+                    "type": "string",
+                    "__example__": "someone@example.com"
+                }
+            },
+            "layout": {
+                "type": "SingleColumnLayout",
+                "children": [
+                    {
+                        "type": "Form",
+                        "name": "email_form",
+                        "init-values": {
+                            "to": "${data.to_init}"
+                        },
+                        "children": [
+                            {
+                                "type": "TextInput",
+                                "label": "To",
+                                "name": "to",
+                                "input-type": "email",
+                                "required": true,
+                                "helper-text": "Recipient's email address"
+                            },
+                            {
+                                "type": "TextInput",
+                                "label": "Subject",
+                                "name": "subject",
+                                "input-type": "text",
+                                "required": false
+                            },
+                            {
+                                "type": "TextArea",
+                                "label": "Message",
+                                "name": "body",
+                                "required": true,
+                                "helper-text": "This is sent from your Gmail exactly as typed."
+                            },
+                            {
+                                "type": "Footer",
+                                "label": "Send email",
+                                "on-click-action": {
+                                    "name": "complete",
+                                    "payload": {
+                                        "intent": "send_email",
+                                        "to": "${form.to}",
+                                        "subject": "${form.subject}",
+                                        "body": "${form.body}"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}

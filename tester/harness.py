@@ -111,7 +111,11 @@ class Simulator:
 # ════════════════════════════════════════════════════════════════
 
 # Knobs scenarios can flip:
-STATE = {"conflicts": []}   # what gmeet_flow.find_conflicts returns
+STATE = {
+    "conflicts": [],        # what gmeet_flow.find_conflicts returns
+    "events": [],           # what calendar.get_all_events returns
+    "attendee_adds": [],    # every calendar.add_attendees call, in order
+}
 
 
 def install_mocks(sim: Simulator):
@@ -123,6 +127,8 @@ def install_mocks(sim: Simulator):
     import bot.services.onboarding as ob
     import bot.services.gmeet_flow as gm
     import bot.agent as agent
+    import bot.tools as tools
+    import bot.services.calendar as cal
 
     def cap_text(wa_id, text):
         sim.record(wa_id, "text", body=text); return True
@@ -184,9 +190,33 @@ def install_mocks(sim: Simulator):
     async def fake_find_conflicts(db_user, dt, duration_minutes):
         return list(STATE["conflicts"])
 
+    async def fake_get_all_events(db_user, max_results=10):
+        return list(STATE["events"])
+
+    async def fake_add_attendees(db_user, event_id, emails):
+        ev = next((e for e in STATE["events"] if e.get("id") == event_id), {})
+        existing = {
+            (a.get("email") or "").lower()
+            for a in (ev.get("attendees") or []) if a.get("email")
+        }
+        added = [e for e in emails if e and e.lower() not in existing]
+        already = [e for e in emails if e and e.lower() in existing]
+        if added:
+            ev.setdefault("attendees", []).extend({"email": e} for e in added)
+        STATE["attendee_adds"].append({"event_id": event_id, "emails": list(emails),
+                                       "added": added})
+        return {"summary": ev.get("summary", "Untitled"),
+                "start": (ev.get("start") or {}).get("dateTime", ""),
+                "meet_link": ev.get("hangoutLink", ""),
+                "added": added, "already": already}
+
     gm.search_contacts = fake_search_contacts
     gm.create_event = fake_create_event
     gm.find_conflicts = fake_find_conflicts
+    # tools.py did `from ... import get_all_events` (bound copy); add_attendees
+    # is imported inside the function, so patch it on the module itself.
+    tools.get_all_events = fake_get_all_events
+    cal.add_attendees = fake_add_attendees
 
     # LLM + datetime parser
     agent._call_groq = llm_mock.make_call_groq()
@@ -197,16 +227,46 @@ def install_mocks(sim: Simulator):
 # DB helpers
 # ════════════════════════════════════════════════════════════════
 
+def reset_rate_limit(wa_id=None):
+    """Clear the per-user flood guard between scenarios."""
+    import bot.main as main
+    if wa_id:
+        main._rate_buckets.pop(wa_id, None)
+        main._rate_notified.pop(wa_id, None)
+    else:
+        main._rate_buckets.clear()
+        main._rate_notified.clear()
+
+
 async def setup_db():
     await init_db()
 
 
 async def reset_user(wa_id):
-    """Remove a user and their tasks so a scenario starts clean."""
+    """Remove a user and EVERYTHING keyed to them so a scenario starts clean.
+
+    SQLite runs with PRAGMA foreign_keys=ON (database.py), so any surviving
+    child row — notes, chat memory, contacts cache — makes the user DELETE
+    fail. Wipe the full set the way the production 'delete my data' handler
+    does, not just tasks.
+    """
     async with async_session() as s:
         u = (await s.execute(select(User).where(User.wa_id == wa_id))).scalar_one_or_none()
         if u:
+            from bot.database import (
+                Note, ChatMemory, ContactCache, MeetingSummary,
+                Reminder, TaskConversationState, OAuthState, WebhookMessage,
+            )
             await s.execute(sql_delete(Task).where(Task.wa_id == wa_id))
+            await s.execute(sql_delete(Note).where(Note.user_id == u.id))
+            await s.execute(sql_delete(ChatMemory).where(ChatMemory.user_id == u.id))
+            await s.execute(sql_delete(ContactCache).where(ContactCache.user_id == u.id))
+            await s.execute(sql_delete(MeetingSummary).where(MeetingSummary.wa_id == wa_id))
+            await s.execute(sql_delete(Reminder).where(Reminder.wa_id == wa_id))
+            await s.execute(sql_delete(TaskConversationState).where(
+                TaskConversationState.wa_id == wa_id))
+            await s.execute(sql_delete(OAuthState).where(OAuthState.wa_id == wa_id))
+            await s.execute(sql_delete(WebhookMessage).where(WebhookMessage.wa_id == wa_id))
             await s.delete(u)
         await s.commit()
     # also clear conversation state

@@ -66,6 +66,40 @@ _H24_RX = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
 _EMAIL_RX = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
+_ADD_TO_EXISTING_RX = re.compile(
+    r"\b(?:add|invite|include)\b.*?"
+    r"(?:\b(?:this|that|the|same)\s+(?:\w+\s+)?(?:meet|meeting|gmeet|call|event)\b"
+    r"|\bas\s+well\b|\btoo\b"
+    r"|\bto\b[^.]*\b(?:meet|meeting|gmeet|call|event)\b)",
+    re.I | re.S,
+)
+# The person being ADDED, i.e. the words right after add/invite/include.
+_ADD_TARGET_RX = re.compile(
+    r"\b(?:add|invite|include)\s+(?:this\s+\w+\s*:?\s*)?([A-Za-z][\w'-]*(?:\s+[A-Za-z][\w'-]*)?)",
+    re.I,
+)
+_ADD_TARGET_STOP = {"this", "that", "the", "them", "him", "her", "a", "an", "to", "in"}
+
+# "what were the action items from the pricing call", "recap of yesterday's
+# meeting", "summary of my last call" — pull requests over stored summaries.
+# Deliberately requires a meeting/call word so email-summary requests
+# ("summarise my emails") don't get captured by this branch.
+_SUMMARY_RX = re.compile(
+    r"\baction\s*items?\b[^?!\n]*\b(?:meet\w*|call)\b"
+    r"|\b(?:recap|summar\w+)\b[^?!\n]*\b(?:meet\w*|call)\b"
+    r"|\b(?:meet\w*|call)\b[^?!\n]*\b(?:recap|summar\w+|notes|takeaways?)\b",
+    re.I,
+)
+
+
+def _extract_add_target(text: str) -> str:
+    m = _ADD_TARGET_RX.search(text or "")
+    if not m:
+        return ""
+    words = [w for w in m.group(1).split() if w.lower() not in _ADD_TARGET_STOP]
+    return " ".join(words).title() if words else ""
+
+
 def _extract_name(text: str) -> str:
     m = _NAME_RX.search(text)
     if m:
@@ -125,6 +159,26 @@ def make_call_groq():
         iso = _extract_iso(last)
         email_m = _EMAIL_RX.search(last)
         meet_intent = any(k in low for k in ("meet", "meeting", "schedule", "call with"))
+
+        # Post-meeting summary questions are their own tool — a well-behaved
+        # model must not reach for gmail_search or invent an answer.
+        if _SUMMARY_RX.search(low):
+            args = {"query": last.strip()[:120]}
+            tc = _ToolCall("call_1", "get_meeting_summaries", json.dumps(args))
+            return _Response(_Choice(_Message(tool_calls=[tc]), "tool_calls"))
+
+        # Adding a guest to an EXISTING event is its own tool. A well-behaved
+        # model must not reach for set_gmeet here — doing so is what made it
+        # re-ask for a title and time the event already had.
+        if _ADD_TO_EXISTING_RX.search(low):
+            args = {}
+            add_name = _extract_add_target(last)
+            if add_name:
+                args["attendee_name"] = add_name
+            if email_m:
+                args["attendee_email"] = email_m.group(0)
+            tc = _ToolCall("call_1", "calendar_add_attendee", json.dumps(args))
+            return _Response(_Choice(_Message(tool_calls=[tc]), "tool_calls"))
 
         # Schedule if there's clear meeting intent, OR the user just supplied a
         # follow-up time / email for an attendee we already know about.

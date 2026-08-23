@@ -163,7 +163,9 @@ async def _fire_reminder_async(reminder_id: int) -> None:
     """Atomically claim → send → finalise (or rollback on failure)."""
     # Lazy import to dodge circular: whatsapp imports config which is fine,
     # but keeping it here makes this module testable without HTTP libs.
-    from bot.services.whatsapp import send_message
+    from bot.services.whatsapp import (
+        send_message, send_message_async, send_reminder_notification,
+    )
 
     # ── Step 1: Atomic claim ──────────────────────────────────
     async with async_session() as session:
@@ -180,18 +182,29 @@ async def _fire_reminder_async(reminder_id: int) -> None:
         message = r.message
         is_recurring = bool(r.is_recurring)
         recur_time = r.recur_time
+        remind_at_snap = r.remind_at        # for the recurring compare-and-swap
 
         if is_recurring and recur_time:
-            # Advance to next wall-clock occurrence (anchor, no drift)
+            # Advance to next wall-clock occurrence (anchor, no drift).
+            # Compare-and-swap on remind_at so two workers (the in-process
+            # scheduler AND the systemd heartbeat) can't both fire it — only
+            # the one that advances the row from its snapshot value proceeds.
             h, m = [int(x) for x in recur_time.split(":")]
             next_local = next_occurrence_local(h, m)
             claim_stmt = (
                 update(Reminder)
-                .where(Reminder.id == reminder_id)
+                .where(Reminder.id == reminder_id,
+                       Reminder.remind_at == remind_at_snap)
                 .values(remind_at=to_utc_naive(next_local))
             )
-            await session.execute(claim_stmt)
+            res = await session.execute(claim_stmt)
             await session.commit()
+            if res.rowcount == 0:
+                logger.info(
+                    f"Recurring reminder #{reminder_id} already advanced by "
+                    f"another worker; skipping"
+                )
+                return
             new_remind_at = to_utc_naive(next_local)
         else:
             # One-shot: claim by flipping is_sent. UPDATE … WHERE
@@ -212,7 +225,14 @@ async def _fire_reminder_async(reminder_id: int) -> None:
             new_remind_at = None
 
     # ── Step 2: Send (outside the DB session) ─────────────────
-    ok = send_message(wa_id, f"reminder:\n\n{message}")
+    # Free-form works only inside WhatsApp's 24-hour customer-service window.
+    # If the user has been quiet >24h, WhatsApp rejects free-form (err 131047),
+    # so fall back to the approved utility template, which is allowed anytime.
+    ok = await send_message_async(wa_id, f"reminder:\n\n{message}")
+    if not ok:
+        ok = send_reminder_notification(wa_id, message)
+        if ok:
+            logger.info(f"Reminder #{reminder_id} delivered via template (out-of-window)")
 
     # ── Step 3: Finalise ──────────────────────────────────────
     if not ok:

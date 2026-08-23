@@ -28,7 +28,9 @@ from sqlalchemy import select, delete as sql_delete
 
 from bot.database import async_session, User, OAuthState
 from bot.config import config
-from bot.services.whatsapp import send_message, send_buttons
+from bot.services.whatsapp import (
+    send_message, send_message_async, send_buttons, send_buttons_async,
+)
 from bot.utils.time import utcnow_naive
 
 logger = logging.getLogger(__name__)
@@ -105,7 +107,7 @@ def _build_flow() -> Optional[Flow]:
         return None
     return Flow.from_client_secrets_file(
         str(cred_path),
-        scopes=config.GOOGLE_SCOPES,
+        scopes=config.google_scopes(),
         redirect_uri=_get_redirect_uri(),
     )
 
@@ -225,7 +227,7 @@ def _decrypt_token_json(stored_token: str) -> str:
 def _missing_google_scopes(stored_token: str) -> list[str]:
     """Return required Google scopes that are absent from a stored token."""
     if not stored_token:
-        return list(config.GOOGLE_SCOPES)
+        return list(config.google_scopes())
     try:
         token_data = json.loads(_decrypt_token_json(stored_token))
         raw_scope = token_data.get("scope") or token_data.get("scopes") or ""
@@ -233,7 +235,7 @@ def _missing_google_scopes(stored_token: str) -> list[str]:
             granted = set(raw_scope.split())
         else:
             granted = set(raw_scope)
-        return [scope for scope in config.GOOGLE_SCOPES if scope not in granted]
+        return [scope for scope in config.google_scopes() if scope not in granted]
     except Exception as e:
         logger.debug(f"Could not inspect Google token scopes: {e}")
         return []
@@ -255,7 +257,7 @@ async def handle_connect(wa_id: str, display_name: str = ""):
     """Handle 'connect' command — send Google auth link via WhatsApp."""
     flow = _build_flow()
     if not flow:
-        send_message(
+        await send_message_async(
             wa_id,
             "google credentials file not found. "
             "place credentials.json in the bot directory.",
@@ -270,11 +272,23 @@ async def handle_connect(wa_id: str, display_name: str = ""):
         if db_user and db_user.google_token_json:
             missing_scopes = _missing_google_scopes(db_user.google_token_json)
         if db_user and db_user.google_token_json and not missing_scopes:
-            send_buttons(wa_id, "your google account is already connected.", [
-                {"id": "disconnect_google", "title": "Disconnect"},
-                {"id": "show_capabilities", "title": "What can I do?"},
-            ])
-            return
+            # Validate the token actually WORKS before claiming "connected".
+            # Testing-mode refresh tokens die every 7 days (invalid_grant);
+            # a dead token must trigger a fresh link, not a false "already
+            # connected" while calendar calls fail (seen in prod).
+            import asyncio
+            creds = await asyncio.to_thread(get_google_creds, db_user)
+            if creds:
+                await send_buttons_async(wa_id, "your google account is already connected.", [
+                    {"id": "disconnect_google", "title": "Disconnect"},
+                    {"id": "show_capabilities", "title": "What can I do?"},
+                ])
+                return
+            # Dead token — clear it and fall through to a fresh auth link.
+            db_user.google_token_json = None
+            db_user.google_email = None
+            await session.commit()
+            await send_message_async(wa_id, "your google link expired — sending a fresh one.")
 
     auth_url, state = flow.authorization_url(
         access_type="offline",
@@ -290,7 +304,7 @@ async def handle_connect(wa_id: str, display_name: str = ""):
     else:
         lead = "*tap to connect google:*"
 
-    send_message(
+    await send_message_async(
         wa_id,
         f"{lead}\n\n"
         f"{auth_url}\n\n"
@@ -320,7 +334,7 @@ async def handle_oauth_callback(code: str, state: str) -> Optional[str]:
         await _persist_token(wa_id, token_json, google_email)
         await _clear_oauth_states(wa_id)
 
-        send_message(
+        await send_message_async(
             wa_id,
             "*google connected.* calendar, contacts, gmail and meet are ready.",
         )
@@ -330,7 +344,7 @@ async def handle_oauth_callback(code: str, state: str) -> Optional[str]:
 
     except Exception as e:
         logger.error(f"OAuth callback exchange error: {e}", exc_info=True)
-        send_message(wa_id, f"connection failed: {e}\n\ntry connecting again.")
+        await send_message_async(wa_id, f"connection failed: {e}\n\ntry connecting again.")
         return None
 
 
@@ -346,6 +360,38 @@ async def _persist_token(wa_id: str, token_json: str, google_email: Optional[str
         if google_email:
             db_user.google_email = google_email
         await session.commit()
+
+    # Warm the contact cache in the background — never blocks the connect
+    # confirmation, and a failure here is harmless (cache fills lazily).
+    try:
+        import asyncio
+        from bot.services.contacts import bootstrap_contacts
+        asyncio.create_task(bootstrap_contacts(wa_id))
+    except RuntimeError:
+        pass  # no running loop (sync test context) — cache warms lazily
+
+    # Drop the confirmation into ChatMemory too. The WhatsApp confirmation is
+    # sent OUTSIDE the agent, so without this the model's memory still ends
+    # with "calendar isn't connected" — and it parrots that instead of
+    # calling the tool (seen in prod, 2026-07-03).
+    await _remember_bot_line(
+        wa_id, "google connected. calendar, contacts, gmail and meet are ready."
+    )
+
+
+async def _remember_bot_line(wa_id: str, line: str) -> None:
+    """Record a bot-sent status line into the agent's chat memory."""
+    try:
+        from bot.database import ChatMemory
+        async with async_session() as session:
+            u = (await session.execute(
+                select(User).where(User.wa_id == wa_id)
+            )).scalar_one_or_none()
+            if u:
+                session.add(ChatMemory(user_id=u.id, role="model", text=line))
+                await session.commit()
+    except Exception as e:
+        logger.debug(f"chat-memory status note skipped: {e}")
 
 
 async def _notify_onboarding_google_connected(wa_id: str) -> None:
@@ -373,14 +419,14 @@ async def handle_auth_code(wa_id: str, text: str) -> bool:
 
     flow = _build_flow()
     if not flow:
-        send_message(wa_id, "google credentials file not found.")
+        await send_message_async(wa_id, "google credentials file not found.")
         return True
 
     try:
         parsed = urlparse(text.strip())
         code = parse_qs(parsed.query).get("code", [None])[0]
         if not code:
-            send_message(wa_id, "couldn't find the code in that url. try connecting again.")
+            await send_message_async(wa_id, "couldn't find the code in that url. try connecting again.")
             return True
 
         flow.fetch_token(code=code)
@@ -390,7 +436,7 @@ async def handle_auth_code(wa_id: str, text: str) -> bool:
         await _persist_token(wa_id, token_json, google_email)
         await _clear_oauth_states(wa_id)
 
-        send_message(
+        await send_message_async(
             wa_id,
             "*google connected.* calendar, contacts, gmail and meet are ready.",
         )
@@ -399,7 +445,7 @@ async def handle_auth_code(wa_id: str, text: str) -> bool:
 
     except Exception as e:
         logger.error(f"OAuth exchange error: {e}", exc_info=True)
-        send_message(wa_id, f"connection failed: {e}\n\ntry connecting again.")
+        await send_message_async(wa_id, f"connection failed: {e}\n\ntry connecting again.")
 
     return True
 
@@ -412,14 +458,23 @@ async def handle_disconnect(wa_id: str):
         result = await session.execute(select(User).where(User.wa_id == wa_id))
         db_user = result.scalar_one_or_none()
         if not db_user or not db_user.google_token_json:
-            send_message(wa_id, "no google account is linked.")
+            await send_message_async(wa_id, "no google account is linked.")
             return
         db_user.google_token_json = None
         db_user.google_email = None
+        user_id = db_user.id
         await session.commit()
 
+    # They revoked Google — drop every Google-derived row we hold.
+    try:
+        from bot.services.contacts import clear_contact_cache
+        await clear_contact_cache(user_id)
+    except Exception as e:
+        logger.warning(f"Contact cache clear on disconnect failed: {e}")
+
     await _clear_oauth_states(wa_id)
-    send_message(wa_id, "google account disconnected.")
+    await send_message_async(wa_id, "google account disconnected.")
+    await _remember_bot_line(wa_id, "google account disconnected.")
 
 
 # ─── Credential loader ───────────────────────────────────────

@@ -8,6 +8,8 @@ from googleapiclient.discovery import build
 from bot.services.google_auth import get_google_creds
 from bot.config import config
 
+from bot.utils.aio import offloaded
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +26,24 @@ def _get_service(user_db):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def create_event(
+# Signature stamped into every event araka creates — which covers every Meet
+# event, since a Meet link can only come from this function. Applied here
+# rather than at the call sites so no future caller can forget it.
+ARAKA_EVENT_TAG = "Booked by araka"
+
+
+def _with_araka_tag(description: str = None) -> str:
+    """Append the araka signature, without duplicating it on re-writes."""
+    text = (description or "").strip()
+    if not text:
+        return ARAKA_EVENT_TAG
+    if ARAKA_EVENT_TAG.lower() in text.lower():
+        return text
+    return f"{text}\n\n{ARAKA_EVENT_TAG}"
+
+
+@offloaded
+def create_event(
     user_db, title: str, event_dt: datetime,
     duration_minutes: int = 60, description: str = None,
     meet_link: bool = False, attendees: list = None,
@@ -47,7 +66,7 @@ async def create_event(
 
     body = {
         "summary": title,
-        "description": description or "Created by FollowUp Bot",
+        "description": _with_araka_tag(description),
         "start": {"dateTime": start_iso, "timeZone": tz},
         "end": {"dateTime": end_iso, "timeZone": tz},
     }
@@ -81,7 +100,8 @@ async def create_event(
     }
 
 
-async def get_all_events(user_db, max_results: int = 10) -> list:
+@offloaded
+def get_all_events(user_db, max_results: int = 10) -> list:
     """List upcoming calendar events."""
     svc = _get_service(user_db)
     if not svc:
@@ -98,7 +118,8 @@ async def get_all_events(user_db, max_results: int = 10) -> list:
     return result.get("items", [])
 
 
-async def delete_event(user_db, event_id: str):
+@offloaded
+def delete_event(user_db, event_id: str):
     """Delete a calendar event by ID."""
     svc = _get_service(user_db)
     if not svc:
@@ -107,7 +128,8 @@ async def delete_event(user_db, event_id: str):
     return True
 
 
-async def day_busy(user_db, day_local: datetime) -> list:
+@offloaded
+def day_busy(user_db, day_local: datetime) -> list:
     """Return [(start, end)] busy intervals for the local calendar day."""
     svc = _get_service(user_db)
     if not svc:
@@ -134,7 +156,8 @@ async def day_busy(user_db, day_local: datetime) -> list:
     return busy
 
 
-async def update_event(
+@offloaded
+def update_event(
     user_db, event_id: str,
     title: str = None, start_iso: str = None, duration_minutes: int = None,
 ) -> str:
@@ -170,7 +193,58 @@ async def update_event(
 # ═══════════════════════════════════════════════════════════════
 
 
-async def find_conflicts(
+@offloaded
+def add_attendees(user_db, event_id: str, emails: list) -> dict:
+    """Add guest(s) to an existing event without disturbing anything else.
+
+    Uses `patch` rather than `update` so a title/time edit made elsewhere
+    isn't clobbered, and MERGES into the existing attendee list instead of
+    replacing it — replacing would silently uninvite everyone already on the
+    event. `sendUpdates="all"` makes Google email the new guests.
+
+    Returns {"summary", "start", "added": [...], "already": [...]}.
+    """
+    svc = _get_service(user_db)
+    if not svc:
+        raise Exception("Google not connected")
+
+    event = svc.events().get(calendarId="primary", eventId=event_id).execute()
+    existing = event.get("attendees", []) or []
+    existing_emails = {
+        (a.get("email") or "").strip().lower() for a in existing if a.get("email")
+    }
+
+    added, already = [], []
+    for raw in emails:
+        addr = (raw or "").strip()
+        if not addr:
+            continue
+        if addr.lower() in existing_emails:
+            already.append(addr)
+            continue
+        existing.append({"email": addr})
+        existing_emails.add(addr.lower())
+        added.append(addr)
+
+    if added:
+        svc.events().patch(
+            calendarId="primary", eventId=event_id,
+            body={"attendees": existing},
+            sendUpdates="all",
+        ).execute()
+
+    return {
+        "summary": event.get("summary", "Untitled"),
+        "start": (event.get("start") or {}).get("dateTime")
+                 or (event.get("start") or {}).get("date") or "",
+        "meet_link": event.get("hangoutLink", "") or "",
+        "added": added,
+        "already": already,
+    }
+
+
+@offloaded
+def find_conflicts(
     user_db, proposed_start: datetime, duration_minutes: int = 30,
 ) -> list:
     """Return a list of events that overlap [proposed_start, proposed_start + duration].
@@ -255,7 +329,8 @@ async def find_conflicts(
 # ═══════════════════════════════════════════════════════════════
 
 
-async def find_free_slots(
+@offloaded
+def find_free_slots(
     user_db, around_time: datetime,
     duration_minutes: int = 30, count: int = 3,
 ) -> list:

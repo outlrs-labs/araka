@@ -20,4 +20,3 @@ google-auth-oauthlib==1.2.0
 # Utilities
 pytz==2024.1
 phonenumbers==8.13.40   # E.164 validation (PRD §FR-8)
-tenacity==8.5.0         # retry w/ backoff for reminder sends (PRD §FR-9)

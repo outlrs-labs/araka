@@ -1,0 +1,640 @@
+<title>Araka Launch Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f8f4;
+    --surface: #ffffff;
+    --surface-2: #eef2ec;
+    --ink: #131f19;
+    --ink-muted: #52645b;
+    --ink-faint: #8a988f;
+    --line: #dde4dc;
+    --accent: #1f7a5c;
+    --accent-ink: #0e4433;
+    --accent-soft: #dbeae1;
+    --money: #9a5f1e;
+    --money-soft: #f3e3cd;
+    --risk: #a23b3b;
+    --risk-soft: #f5e1de;
+    --bubble-them: #ffffff;
+    --bubble-me: #d6ede1;
+    --shadow: 0 1px 2px rgba(19,31,25,0.06), 0 8px 24px -12px rgba(19,31,25,0.12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1512;
+      --surface: #131e19;
+      --surface-2: #182420;
+      --ink: #e9f0ec;
+      --ink-muted: #9db0a6;
+      --ink-faint: #6c8079;
+      --line: #24332c;
+      --accent: #4fbf95;
+      --accent-ink: #bdf0d8;
+      --accent-soft: #17332a;
+      --money: #e0a962;
+      --money-soft: #2b2214;
+      --risk: #e2897f;
+      --risk-soft: #2e1c1a;
+      --bubble-them: #182420;
+      --bubble-me: #1c3a2d;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0d1512;
+    --surface: #131e19;
+    --surface-2: #182420;
+    --ink: #e9f0ec;
+    --ink-muted: #9db0a6;
+    --ink-faint: #6c8079;
+    --line: #24332c;
+    --accent: #4fbf95;
+    --accent-ink: #bdf0d8;
+    --accent-soft: #17332a;
+    --money: #e0a962;
+    --money-soft: #2b2214;
+    --risk: #e2897f;
+    --risk-soft: #2e1c1a;
+    --bubble-them: #182420;
+    --bubble-me: #1c3a2d;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 840px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  h1, h2, h3 {
+    font-family: "Fraunces", ui-serif, Georgia, serif;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  a { color: var(--accent-ink); }
+
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace; }
+
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* Masthead */
+  .masthead { display: flex; flex-direction: column; gap: 1.1rem; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 1.6rem;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  .masthead h1 {
+    font-size: clamp(1.9rem, 4vw, 2.6rem);
+    line-height: 1.15;
+    max-width: 18ch;
+  }
+
+  .dek {
+    font-size: 1.05rem;
+    color: var(--ink-muted);
+    max-width: 58ch;
+    margin: 0;
+  }
+
+  .provenance {
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+  }
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 0.9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .stat .v {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: var(--accent-ink);
+  }
+  .stat .k {
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.03em;
+  }
+
+  @media (max-width: 620px) {
+    .stat-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* Section shell */
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  .section-head { display: flex; flex-direction: column; gap: 0.4rem; }
+  .section-head h2 { font-size: 1.5rem; }
+  .section-head p { margin: 0; color: var(--ink-muted); max-width: 60ch; }
+
+  /* Loop metric hero callout */
+  .loop-card {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    padding: 1.6rem 1.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .loop-card .label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+  }
+  .loop-card .formula {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-size: 1.35rem;
+    color: var(--ink);
+  }
+  .loop-card p { margin: 0; color: var(--ink-muted); max-width: 62ch; }
+
+  /* ICP */
+  .icp-row {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .chip {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 999px;
+    padding: 0.4rem 0.85rem;
+    font-size: 0.85rem;
+    color: var(--ink-muted);
+  }
+
+  /* Week rail */
+  .weeks {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-left: 2px solid var(--line);
+    margin-left: 0.4rem;
+  }
+  .week {
+    position: relative;
+    padding: 0 0 2.4rem 2rem;
+  }
+  .week:last-child { padding-bottom: 0; }
+  .week::before {
+    content: "";
+    position: absolute;
+    left: -6.5px;
+    top: 0.3rem;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+  }
+  .week-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+  }
+  .week-tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.75rem;
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    border-radius: 5px;
+    padding: 0.15rem 0.5rem;
+  }
+  .week-days {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+  }
+  .week h3 { font-size: 1.2rem; margin-top: 0.3rem; }
+  .week .goal { color: var(--ink-muted); margin: 0.2rem 0 0.7rem; max-width: 58ch; }
+  .week ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .week li { color: var(--ink); }
+  .week li b { color: var(--ink); }
+  .week-foot {
+    display: flex;
+    gap: 1.2rem;
+    margin-top: 0.9rem;
+    flex-wrap: wrap;
+  }
+  .week-foot .item {
+    font-size: 0.82rem;
+    color: var(--ink-muted);
+    display: flex;
+    gap: 0.4rem;
+  }
+  .week-foot .item span.k { color: var(--ink-faint); }
+  .week-foot .item span.v { font-family: "IBM Plex Mono", monospace; color: var(--ink); }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 480px; }
+  thead th {
+    text-align: left;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-2);
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  tbody td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.total td {
+    font-weight: 600;
+    background: var(--surface-2);
+  }
+  td.amount, th.amount { font-family: "IBM Plex Mono", monospace; white-space: nowrap; color: var(--money); }
+  tbody td.muted { color: var(--ink-muted); }
+
+  /* Chat bubbles for templates */
+  .thread {
+    display: flex;
+    flex-direction: column;
+    gap: 1.3rem;
+  }
+  .exchange { display: flex; flex-direction: column; gap: 0.4rem; }
+  .exchange .who {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .bubble {
+    max-width: 34rem;
+    border-radius: 14px;
+    padding: 0.8rem 1rem;
+    box-shadow: var(--shadow);
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+  .bubble.them { background: var(--bubble-them); border: 1px solid var(--line); border-top-left-radius: 3px; }
+  .bubble.me { background: var(--bubble-me); border: 1px solid var(--accent); border-top-right-radius: 3px; align-self: flex-end; }
+  .bubble .btns {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.7rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+  }
+  .bubble .btn {
+    font-size: 0.8rem;
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+  .exchange.right { align-items: flex-end; }
+
+  /* Guardrails */
+  .guardrail {
+    display: flex;
+    gap: 0.9rem;
+    background: var(--risk-soft);
+    border-left: 3px solid var(--risk);
+    border-radius: 0 8px 8px 0;
+    padding: 0.9rem 1.1rem;
+  }
+  .guardrail .tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--risk);
+    flex-shrink: 0;
+    padding-top: 0.15rem;
+    width: 5.5rem;
+  }
+  .guardrail p { margin: 0; color: var(--ink); font-size: 0.92rem; }
+  .guardrails-list { display: flex; flex-direction: column; gap: 0.7rem; }
+
+  /* Checkpoint */
+  .checkpoint {
+    background: var(--money-soft);
+    border: 1px solid var(--money);
+    border-radius: 14px;
+    padding: 1.6rem 1.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .checkpoint .label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--money);
+  }
+  .checkpoint p { margin: 0; color: var(--ink); max-width: 64ch; }
+  .checkpoint p.muted { color: var(--ink-muted); font-size: 0.9rem; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 1.2rem;
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">30-day plan · consumer + bilateral loop</div>
+    <h1>Turn 100 pilot users into a loop that feeds itself</h1>
+    <p class="dek">A founder-led channel plan for Araka's next 30 days, built on top of the existing positioning and pricing work in <code>Document/</code>. Priority: validate that the bilateral coordination mechanic — Araka messaging the <em>other</em> person in every meeting — can acquire users at close to zero cost.</p>
+    <p class="provenance">Prepared 2026-08-19 · Source: <code>araka-vs-poke-strategy.md</code>, <code>CONTEXT.md</code></p>
+
+    <div class="stat-strip">
+      <div class="stat"><span class="v num">$100</span><span class="k">total budget (₹8,300)</span></div>
+      <div class="stat"><span class="v num">~100</span><span class="k">starting pilot users</span></div>
+      <div class="stat"><span class="v">Consumer</span><span class="k">priority track this cycle</span></div>
+      <div class="stat"><span class="v">Aug 19 → Sep 17</span><span class="k">30-day window</span></div>
+    </div>
+  </header>
+
+  <section class="loop-metric">
+    <div class="loop-card">
+      <span class="label">The one number that matters</span>
+      <span class="formula">non-users exposed → opted in → became active users</span>
+      <p>Every meeting Araka books also messages the counterparty — a person who's never used Araka. That's the entire growth thesis: a scheduling utility with a built-in, WhatsApp-native referral loop that Poke's single-player design structurally can't copy. This plan exists to find out if that conversion rate is real. Everything below is instrumented against it, not against raw sign-ups.</p>
+    </div>
+  </section>
+
+  <section class="icp">
+    <div class="section-head">
+      <h2>Who this month is for</h2>
+      <p>Narrow on purpose. Chase people who already feel "did they confirm? will they show up?" pain and live in WhatsApp — not a general audience.</p>
+    </div>
+    <div class="icp-row">
+      <span class="chip">Solo founders &amp; freelancers booking calls with others</span>
+      <span class="chip">Schedules ≥5 things/week with other people</span>
+      <span class="chip">Already coordinates over WhatsApp</span>
+      <span class="chip">Will give blunt feedback</span>
+    </div>
+  </section>
+
+  <section class="weeks">
+
+    <div class="week">
+      <div class="week-head">
+        <span class="week-tag">week 01</span>
+        <span class="week-days num">Aug 19 – Aug 25</span>
+      </div>
+      <h3>Foundation &amp; seed</h3>
+      <p class="goal">Get instrumentation and message quality right before spending any distribution effort on it.</p>
+      <ul>
+        <li><b>Instrument the loop</b> — track three counts weekly: bilateral messages sent to non-users, opt-ins, and meetings booked by that new user within 14 days. A spreadsheet against <code>users.consent_status</code> and <code>tasks</code> is enough; no dashboard needed yet.</li>
+        <li><b>Direct outreach</b> — 30–40 personal-network messages using the outreach template below. Target: people who already fit the ICP, not a cold list.</li>
+        <li><b>Community groundwork</b> — join 4–5 India-focused WhatsApp/Telegram/Discord communities (indie hacker, freelancer, small-broker groups). Lurk and add value this week — no pitching yet.</li>
+        <li><b>Shoot the demo</b> — a 15–20s screen recording of the actual bilateral flow: booking a meeting, the confirm tap, the message landing on the other person's phone. This is the single asset every later channel reuses.</li>
+      </ul>
+      <div class="week-foot">
+        <div class="item"><span class="k">Spend</span><span class="v">$0</span></div>
+        <div class="item"><span class="k">Track</span><span class="v">opt-in rate on direct outreach</span></div>
+      </div>
+    </div>
+
+    <div class="week">
+      <div class="week-head">
+        <span class="week-tag">week 02</span>
+        <span class="week-days num">Aug 26 – Sep 1</span>
+      </div>
+      <h3>Content &amp; community push</h3>
+      <p class="goal">Put the demo in front of people who'd feel the pain, without looking like an ad.</p>
+      <ul>
+        <li><b>Organic posts</b> — the demo clip on X, LinkedIn, and Instagram Reels, framed as "built this because I kept losing time chasing confirmations," not a product launch.</li>
+        <li><b>Community posts</b> — share in the groups joined last week, value-first: the problem it solves, offer to set people up personally, ask for blunt feedback.</li>
+        <li><b>Product Hunt / Peerlist prep</b> — draft the listing (tagline, gallery, first-comment story) for a Week 3 launch day. Don't launch yet — a rushed listing underperforms a prepared one.</li>
+        <li><b>Keep direct outreach running</b> — another 20–30 messages, now including anyone who liked/replied to the organic posts.</li>
+      </ul>
+      <div class="week-foot">
+        <div class="item"><span class="k">Spend</span><span class="v">$0</span></div>
+        <div class="item"><span class="k">Track</span><span class="v">which channel's users book a 2nd meeting</span></div>
+      </div>
+    </div>
+
+    <div class="week">
+      <div class="week-head">
+        <span class="week-tag">week 03</span>
+        <span class="week-days num">Sep 2 – Sep 8</span>
+      </div>
+      <h3>Paid test &amp; launch day</h3>
+      <p class="goal">Spend the entire test budget on one channel, not several — $100 split three ways teaches you nothing.</p>
+      <ul>
+        <li><b>Product Hunt / Peerlist launch day</b> — call in the personal network from Week 1 for early votes/comments; this is a distribution event, not a metric to optimize for its own sake.</li>
+        <li><b>One paid test</b> — either a boosted Instagram/Meta post targeting India, 22–40, interested in productivity/small business tools, or a single nano-influencer (5–20k followers, productivity/hustle-culture niche) posting the demo. Pick whichever is cheaper to arrange this week; don't run both.</li>
+        <li><b>Double down mid-week</b> — by Wednesday, look at which of Weeks 1–2's channels produced the best opt-in→active conversion, and shift the remaining organic effort there.</li>
+      </ul>
+      <div class="week-foot">
+        <div class="item"><span class="k">Spend</span><span class="v">~$65 / ₹5,400</span></div>
+        <div class="item"><span class="k">Track</span><span class="v">bilateral opt-in rate by source</span></div>
+      </div>
+    </div>
+
+    <div class="week">
+      <div class="week-head">
+        <span class="week-tag">week 04</span>
+        <span class="week-days num">Sep 9 – Sep 17</span>
+      </div>
+      <h3>Read the loop, decide the next 30</h3>
+      <p class="goal">Turn four weeks of data into one decision, made explicitly rather than by default.</p>
+      <ul>
+        <li><b>Close the funnel numbers</b> — outreach sent, opt-in rate, active users, and — the number that actually matters — non-user→user conversion off the bilateral message.</li>
+        <li><b>Kill what didn't work</b> — cut channels that produced sign-ups but not repeat bookings; a booked-once user isn't validation.</li>
+        <li><b>Collect 2–3 real quotes</b> — from users who had Araka handle a real reschedule or no-show save. These become the next round's proof, not the demo clip.</li>
+        <li><b>Hit the Day-30 checkpoint below</b> before committing to another 30-day cycle on the same track.</li>
+      </ul>
+      <div class="week-foot">
+        <div class="item"><span class="k">Spend</span><span class="v">~$15 / ₹1,250 buffer</span></div>
+        <div class="item"><span class="k">Track</span><span class="v">K-factor estimate on the bilateral loop</span></div>
+      </div>
+    </div>
+
+  </section>
+
+  <section class="budget">
+    <div class="section-head">
+      <h2>Where the $100 goes</h2>
+      <p>Matches the product's own ~$0 infra posture — nearly all of this cycle is founder time, not spend.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Line item</th><th>When</th><th class="amount">Amount</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Boosted post or nano-influencer demo</td>
+            <td class="muted">Week 3</td>
+            <td class="amount num">$65 / ₹5,400</td>
+          </tr>
+          <tr>
+            <td>WhatsApp utility-template message costs (meeting &amp; reminder notifications, business-initiated after the 24h window)</td>
+            <td class="muted">Ongoing, as volume grows</td>
+            <td class="amount num">$20 / ₹1,700</td>
+          </tr>
+          <tr>
+            <td>Contingency — Product Hunt assets, small referral perk</td>
+            <td class="muted">Flexible</td>
+            <td class="amount num">$15 / ₹1,250</td>
+          </tr>
+          <tr class="total">
+            <td>Total</td>
+            <td></td>
+            <td class="amount num">$100 / ₹8,300</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="templates">
+    <div class="section-head">
+      <h2>Copy to actually send</h2>
+      <p>Three messages this plan runs on — the outreach DM you send, the message Araka sends on your behalf, and a community post that doesn't read as a pitch.</p>
+    </div>
+    <div class="thread">
+
+      <div class="exchange">
+        <span class="who">Direct outreach — sent by you, Week 1–2</span>
+        <div class="bubble them">Hi Priya — I built Araka, a WhatsApp assistant that confirms and reminds people about your meetings automatically, so fewer no-shows and less back-and-forth. It also messages whoever you're meeting (with their OK) so both sides actually show up. No app, no login — just WhatsApp. Free while I'm testing — want me to set you up? Takes 2 minutes.</div>
+      </div>
+
+      <div class="exchange right">
+        <span class="who">Bilateral confirmation — sent by Araka to the counterparty</span>
+        <div class="bubble me">Hi Rahul, Priya confirmed a meeting via Araka: <b>Design review</b> on Thu, Aug 21 · 4:00 PM. Reply STOP any time to opt out.
+          <div class="btns"><span class="btn">Add to calendar</span><span class="btn">Can't make it</span></div>
+        </div>
+      </div>
+
+      <div class="exchange">
+        <span class="who">Community post — Week 2, value-first</span>
+        <div class="bubble them">Been building something the past few months: an assistant that lives in WhatsApp and handles the "did they confirm?" back-and-forth when you're scheduling with other people. It also nudges the other side (with their consent) so meetings actually happen. Free while I'm testing — happy to set up anyone who schedules a lot with others and wants to try breaking it. Feedback over sign-ups right now.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="metrics">
+    <div class="section-head">
+      <h2>What to read every week</h2>
+      <p>Five numbers, checked weekly. The last row is the one the whole plan is a test of.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>Metric</th><th class="amount">Week-4 target</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Reach</td><td class="muted">Direct outreach + community posts sent</td><td class="amount num">~90</td></tr>
+          <tr><td>Opt-in</td><td class="muted">% of contacted who complete onboarding</td><td class="amount num">30–40%</td></tr>
+          <tr><td>Activation</td><td class="muted">Users who book ≥1 real meeting</td><td class="amount num">200–250</td></tr>
+          <tr><td>Bilateral exposure</td><td class="muted">Non-users messaged as a counterparty</td><td class="amount num">150+</td></tr>
+          <tr><td>The loop</td><td class="muted">Non-user → active-user conversion off that message</td><td class="amount num">directional, not a target — read it, don't force it</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="guardrails">
+    <div class="section-head">
+      <h2>What not to do this month</h2>
+      <p>The strategy doc flags Meta's tolerance for a narrow WhatsApp bot as the single existential risk. Marketing is exactly where that gets tested first.</p>
+    </div>
+    <div class="guardrails-list">
+      <div class="guardrail">
+        <span class="tag">Positioning</span>
+        <p>Never market Araka as a "general AI chatbot" or "AI assistant" in the open-ended sense — every post, bio, and listing says <em>scheduling</em>. That framing is why Meta tolerates it on WhatsApp at all.</p>
+      </div>
+      <div class="guardrail">
+        <span class="tag">Consent</span>
+        <p>Growth comes from people messaging the bot themselves after seeing a post or hearing from you directly — never from importing or bulk-messaging a contact list to manufacture bilateral exposure.</p>
+      </div>
+      <div class="guardrail">
+        <span class="tag">Opt-out</span>
+        <p>Watch the STOP rate on bilateral messages weekly, not just at the Day-30 review. A rising opt-out rate is the earliest signal something in the copy or targeting is off.</p>
+      </div>
+      <div class="guardrail">
+        <span class="tag">Communities</span>
+        <p>Most India tech/founder groups ban self-promo without context. Lead with the problem and an offer to help, not a link — Week 1's "no pitching yet" groundwork is what earns the right to post in Week 2.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="checkpoint">
+    <span class="label">Day-30 checkpoint</span>
+    <p>This cycle runs consumer + bilateral loop first, by your call. Worth saying plainly: the strategy doc's own verdict is that SMB/concierge outreach — clinics, salons, tuition centers, brokers — is where durable ARR actually lives, because no-shows are a budgeted cost for them, not a nice-to-have.</p>
+    <p>So the decision at Week 4 isn't "did we get users" — it's whether the bilateral loop shows real virality: people converting because Araka messaged them, not because you personally reached out. If the non-user→user conversion rate holds up without your direct hustle behind it, keep pushing consumer. If it's flat once you stop manually driving it, redirect the next 30 days and the next test budget toward the 5–10 SMB pilot in <code>araka-vs-poke-strategy.md</code> instead.</p>
+    <p class="muted">Either outcome is useful data — the point of this cycle is finding out which one you're in.</p>
+  </section>
+
+  <footer>
+    Built from <code>Document/araka-vs-poke-strategy.md</code> and <code>Document/CONTEXT.md</code> — no files outside <code>Document/</code> were read for this plan.
+  </footer>
+
+</div>

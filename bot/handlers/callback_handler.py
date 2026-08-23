@@ -18,9 +18,13 @@ from bot.config import config
 from bot.database import async_session, ChatMemory, User
 from bot.services.task_service import (
     get_conversation_state, set_conversation_state, clear_conversation_state,
-    cancel_task, complete_task, parse_datetime_from_text,
+    cancel_task, parse_datetime_from_text,
 )
-from bot.services.whatsapp import send_message, send_buttons, send_list
+from bot.services.whatsapp import (
+    send_message, send_message_async,
+    send_buttons, send_buttons_async,
+    send_list, send_list_async,
+)
 from bot.utils.time import now_local
 from bot.utils.intent import extract_meeting_datetime
 
@@ -82,22 +86,34 @@ async def handle_interactive_reply(wa_id: str, reply_id: str, reply_title: str =
         await _handle_conflict(wa_id, reply_id)
     elif reply_id.startswith("gmeet_confirm_"):
         await _handle_gmeet_confirm(wa_id, reply_id)
+    elif reply_id.startswith("calendar_reschedule_confirm_"):
+        await _handle_calendar_reschedule_confirm(wa_id, reply_id)
+    elif reply_id.startswith("add_attendee_confirm_"):
+        await _handle_add_attendee_confirm(wa_id, reply_id)
+    elif reply_id.startswith("add_attendee_contact_"):
+        await _handle_add_attendee_contact_choice(wa_id, reply_id)
+    elif reply_id.startswith("add_attendee_event_"):
+        await _handle_add_attendee_event_choice(wa_id, reply_id)
     elif reply_id.startswith("gmeet_contact_"):
         await _handle_gmeet_contact_choice(wa_id, reply_id)
+    elif reply_id.startswith("mtgsummary_"):
+        await _handle_mtgsummary_choice(wa_id, reply_id)
+    elif reply_id == "mtg_todos_add":
+        await _handle_mtg_todos_add(wa_id)
+    elif reply_id == "mtg_remind_set":
+        await _handle_mtg_remind_set(wa_id)
     elif reply_id.startswith("meeting_add_calendar") or reply_text in (
         "add to the calendar", "add to the calender"
     ):
         await _handle_meeting_add_calendar(wa_id, reply_id)
     elif reply_id.startswith("meeting_decline") or reply_text == "no":
         await _handle_meeting_decline(wa_id)
-    elif reply_id.startswith("task_"):
-        await _handle_completion(wa_id, reply_id)
     elif reply_id.startswith("onboard_"):
         await _handle_onboarding(wa_id, reply_id)
     elif reply_id == "cancel_flow":
         await _handle_cancel(wa_id)
     else:
-        send_message(wa_id, "unknown action. try again.")
+        await send_message_async(wa_id, "unknown action. try again.")
 
 
 async def _handle_meeting_add_calendar(wa_id: str, reply_id: str):
@@ -106,14 +122,14 @@ async def _handle_meeting_add_calendar(wa_id: str, reply_id: str):
     meeting_link = parts[1].strip() if len(parts) == 2 else ""
 
     if meeting_link:
-        send_message(
+        await send_message_async(
             wa_id,
             "here is your meeting link:\n"
             f"{meeting_link}\n\n"
             "you can add it to your calendar from the invite details.",
         )
     else:
-        send_message(
+        await send_message_async(
             wa_id,
             "got it. use the meeting link from the invite message "
             "to add this meeting to your calendar.",
@@ -123,7 +139,7 @@ async def _handle_meeting_add_calendar(wa_id: str, reply_id: str):
 async def _handle_meeting_decline(wa_id: str):
     """Handle attendee decline quick reply from the meeting invite template."""
     logger.info(f"Meeting invite declined by attendee wa_id={wa_id}")
-    send_message(wa_id, "no problem. i've noted that you declined this meeting invitation.")
+    await send_message_async(wa_id, "no problem. i've noted that you declined this meeting invitation.")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -137,7 +153,9 @@ def _gmeet_data_from_result(data: dict) -> dict:
         "attendee_phone": data.get("attendee_phone") or "",
         "title": data.get("title") or "",
         "start_time_iso": data.get("start_time_iso") or data.get("date_iso") or "",
-        "duration_minutes": data.get("duration_minutes") or 60,
+        # 30 to match set_gmeet and PRD §FR-3. This defaulted to 60, so any
+        # payload with a falsy duration silently doubled the meeting length.
+        "duration_minutes": data.get("duration_minutes") or 30,
     }
 
 
@@ -178,26 +196,26 @@ async def send_gmeet_contact_picker(wa_id: str, data: dict):
         })
 
     if rows:
-        send_list(
+        await send_list_async(
             wa_id,
             data.get("message") or "i found multiple matching contacts. which one should i book with?",
             "Pick contact",
             [{"title": "Matching contacts", "rows": rows}],
         )
     else:
-        send_message(wa_id, data.get("message") or "send the attendee's gmail address.")
+        await send_message_async(wa_id, data.get("message") or "send the attendee's gmail address.")
 
 
 async def send_gmeet_email_request(wa_id: str, data: dict):
     ctx = {"flow_kind": "gmeet", "gmeet_data": _gmeet_data_from_result(data)}
     await set_conversation_state(wa_id, "awaiting_gmeet_email", ctx)
-    send_message(wa_id, data.get("message") or "send the attendee's gmail address.")
+    await send_message_async(wa_id, data.get("message") or "send the attendee's gmail address.")
 
 
 async def send_gmeet_time_request(wa_id: str, data: dict):
     ctx = {"flow_kind": "gmeet", "gmeet_data": _gmeet_data_from_result(data)}
     await set_conversation_state(wa_id, "awaiting_gmeet_time", ctx)
-    send_message(wa_id, data.get("message") or "send the meeting date and time.")
+    await send_message_async(wa_id, data.get("message") or "send the meeting date and time.")
 
 
 async def send_gmeet_conflict_buttons(wa_id: str, data: dict):
@@ -207,7 +225,7 @@ async def send_gmeet_conflict_buttons(wa_id: str, data: dict):
         "conflicts": data.get("conflicts") or [],
     }
     await set_conversation_state(wa_id, "awaiting_conflict_resolution", ctx)
-    send_buttons(wa_id, data.get("message") or "that time conflicts with another event.", [
+    await send_buttons_async(wa_id, data.get("message") or "that time conflicts with another event.", [
         {"id": "conflict_keep_both", "title": "Keep both"},
         {"id": "conflict_move_later", "title": "Change time"},
         {"id": "cancel_flow", "title": "Cancel"},
@@ -334,7 +352,7 @@ async def handle_gmeet_flow_completion(wa_id: str, response_json: str):
     try:
         form = json.loads(response_json or "{}")
     except json.JSONDecodeError:
-        send_message(wa_id, "i couldn't read that form. tell me the details in chat instead.")
+        await send_message_async(wa_id, "i couldn't read that form. tell me the details in chat instead.")
         return
 
     raw_date = str(form.get("date") or "").strip()
@@ -350,7 +368,7 @@ async def handle_gmeet_flow_completion(wa_id: str, response_json: str):
                                     hour=h, minute=m, second=0, microsecond=0)
         start_iso = local.isoformat()
     except (ValueError, TypeError):
-        send_message(wa_id, "that date/time didn't come through. send it in chat, e.g. *tomorrow 9 am*.")
+        await send_message_async(wa_id, "that date/time didn't come through. send it in chat, e.g. *tomorrow 9 am*.")
         return
 
     # Phone survives outside the form via the saved context.
@@ -382,7 +400,7 @@ async def handle_gmeet_flow_completion(wa_id: str, response_json: str):
         data = json.loads(result)
     except (TypeError, json.JSONDecodeError):
         await clear_conversation_state(wa_id)
-        send_message(wa_id, str(result))
+        await send_message_async(wa_id, str(result))
         return
 
     if data.get("action") == "awaiting_confirmation":
@@ -390,6 +408,111 @@ async def handle_gmeet_flow_completion(wa_id: str, response_json: str):
         await _run_gmeet_from_context(wa_id, new_ctx, confirmed=True)
         return
     await _handle_gmeet_tool_result(wa_id, data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Email-from-chat (WhatsApp Flow wrapper) — AI never touches content
+# ═══════════════════════════════════════════════════════════════
+
+async def send_email_flow(wa_id: str, to_init: str = "") -> bool:
+    """Open the native email form (To / Subject / Body).
+
+    Privacy contract: everything is typed by the user inside the Flow and
+    goes Flow -> Gmail. The AI only opens the form; it never writes or reads
+    the subject/body. `to_init` is an optional recipient prefill taken from
+    a literal address the user typed — never invented.
+
+    Returns False when no Flow is configured or the send failed. The caller
+    must NOT fall back to collecting the body in chat (that would defeat the
+    whole point), so a False result becomes a plain "not available" reply.
+    """
+    from bot.services.whatsapp import send_flow
+    import uuid as _uuid
+
+    if not config.WA_EMAIL_FLOW_ID:
+        return False
+
+    flow_token = f"email:{wa_id}:{_uuid.uuid4().hex[:12]}"
+    flow_data = {"to_init": (to_init or "").strip()}
+    return send_flow(
+        wa_id,
+        "tap below to write your email — i'll send it from your gmail, "
+        "exactly as you type it. i don't read or change what you write.",
+        config.WA_EMAIL_FLOW_ID, "COMPOSE", flow_data,
+        cta="Write email", flow_token=flow_token,
+    )
+
+
+async def handle_email_flow_completion(wa_id: str, form: dict):
+    """Send the email from the submitted Flow form.
+
+    The AI is OUT of the loop: `to`, `subject`, `body` come verbatim from the
+    user's form input and are passed straight to Gmail.
+    """
+    to = (form.get("to") or "").strip()
+    subject = (form.get("subject") or "").strip()
+    body = form.get("body") or ""
+
+    async with async_session() as session:
+        u = (await session.execute(
+            select(User).where(User.wa_id == wa_id)
+        )).scalar_one_or_none()
+
+    if not u or not u.google_token_json:
+        await send_buttons_async(
+            wa_id, "connect google first so i can send from your gmail.",
+            [{"id": "connect_google", "title": "Connect Google"}],
+        )
+        return
+
+    from bot.services.gmail import send_email, GmailScopeError, is_valid_email
+
+    if not is_valid_email(to):
+        await send_message_async(wa_id, "that recipient address looks off. start the email again and double-check it.")
+        return
+    if not body.strip():
+        await send_message_async(wa_id, "the message was empty, so i didn't send anything.")
+        return
+
+    try:
+        await send_email(u, to=to, subject=subject, body=body)
+    except GmailScopeError:
+        await send_buttons_async(
+            wa_id,
+            "i need send permission on your gmail. tap to update google access, then try again.",
+            [{"id": "connect_google", "title": "Update access"}],
+        )
+        return
+    except ValueError as e:
+        await send_message_async(wa_id, f"couldn't send — {e}.")
+        return
+    except Exception:
+        await send_message_async(wa_id, "gmail wouldn't send that just now. give it another go in a moment.")
+        return
+
+    await send_message_async(wa_id, f"sent to {to}.\nsubject: {subject or '(no subject)'}")
+
+
+async def handle_flow_completion(wa_id: str, response_json: str):
+    """Route any WhatsApp Flow submission (nfm_reply) to the right handler.
+
+    The email and meeting forms both arrive as nfm_reply; we tell them apart
+    by the payload — the email form stamps `intent=send_email` and carries a
+    `body` field, which the meeting form never has.
+    """
+    try:
+        form = json.loads(response_json or "{}")
+    except json.JSONDecodeError:
+        await send_message_async(wa_id, "i couldn't read that form. tell me what you need in chat.")
+        return
+
+    is_email = form.get("intent") == "send_email" or ("body" in form and "to" in form)
+    if is_email:
+        await handle_email_flow_completion(wa_id, form)
+        return
+
+    # Default: the meeting form (parses the raw json itself).
+    await handle_gmeet_flow_completion(wa_id, response_json)
 
 
 async def _parse_user_meeting_time(text: str) -> str:
@@ -423,6 +546,16 @@ async def handle_gmeet_text_reply(wa_id: str, text: str, flow_state: str, ctx: d
     Outside an active flow, the model still drives (this returns False).
     Returning True = handled (LLM won't see the message).
     """
+    # Add-attendee runs its own small accumulator: the only thing it can be
+    # waiting on is an email or a picker choice, so a typed reply must never
+    # reach the model — that's where the re-asking starts.
+    if ctx.get("flow_kind") == "add_attendee" and flow_state:
+        return await _handle_add_attendee_text_reply(wa_id, text, flow_state, ctx)
+
+    # Post-meeting summary flow: action gate + reminder-time question.
+    if ctx.get("flow_kind") == "mtg_summary" and flow_state:
+        return await _handle_mtg_summary_text_reply(wa_id, text, flow_state, ctx)
+
     if ctx.get("flow_kind") != "gmeet" or not flow_state:
         return False
 
@@ -437,7 +570,7 @@ async def handle_gmeet_text_reply(wa_id: str, text: str, flow_state: str, ctx: d
         if t in ("no", "n", "cancel", "abort", "edit", "change"):
             await clear_conversation_state(wa_id)
             await _purge_recent_chat_memory(wa_id, count=6)
-            send_message(wa_id, "okay, cancelled. tell me the details again whenever you're ready.")
+            await send_message_async(wa_id, "okay, cancelled. tell me the details again whenever you're ready.")
             return True
         # Changed their mind / asked something else → drop the gate, let the model handle it.
         await clear_conversation_state(wa_id)
@@ -455,7 +588,7 @@ async def handle_gmeet_text_reply(wa_id: str, text: str, flow_state: str, ctx: d
             ctx["gmeet_data"] = gd
             await _run_gmeet_from_context(wa_id, ctx)
             return True
-        send_message(wa_id, "tap *Keep both*, or send a new date and time for this google meet.")
+        await send_message_async(wa_id, "tap *Keep both*, or send a new date and time for this google meet.")
         return True
 
     # ── Native form open, but the user typed instead ────────────
@@ -493,16 +626,16 @@ async def handle_gmeet_text_reply(wa_id: str, text: str, flow_state: str, ctx: d
             await _run_gmeet_from_context(wa_id, ctx)   # keeps existing start_time_iso
             return True
         if flow_state == "awaiting_gmeet_contact":
-            send_message(wa_id, "pick a contact, type its number, or send the gmail address.")
+            await send_message_async(wa_id, "pick a contact, type its number, or send the gmail address.")
         else:
-            send_message(wa_id, "send a valid gmail, e.g. name@example.com.")
+            await send_message_async(wa_id, "send a valid gmail, e.g. name@example.com.")
         return True
 
     # ── Time step — MERGE time, keep the known email ────────────
     if flow_state == "awaiting_gmeet_time":
         iso = await _parse_user_meeting_time(text)
         if not iso:
-            send_message(
+            await send_message_async(
                 wa_id,
                 "i couldn't read a time from that. try *tomorrow 12 pm*, "
                 "*today 5pm*, or *friday 3:30 pm*.",
@@ -527,7 +660,7 @@ async def _handle_gmeet_confirm(wa_id: str, data: str):
     """
     flow_state, ctx = await get_conversation_state(wa_id)
     if flow_state != "awaiting_gmeet_confirmation":
-        send_message(wa_id, "this confirmation has expired. start again when ready.")
+        await send_message_async(wa_id, "this confirmation has expired. start again when ready.")
         return
 
     action = data.replace("gmeet_confirm_", "")
@@ -540,31 +673,64 @@ async def _handle_gmeet_confirm(wa_id: str, data: str):
         # failed-flow turns. Wipe them so it can't.
         purged = await _purge_recent_chat_memory(wa_id, count=6)
         logger.info(f"Edit pressed; purged {purged} ChatMemory rows for {wa_id}")
-        send_message(
+        await send_message_async(
             wa_id,
             "cancelled. send me the meeting details fresh.\n"
             "for example: *meet with harsh tomorrow 12 pm* or "
             "*call with sarah@example.com friday 3 pm*.",
         )
     else:
-        send_message(wa_id, "unknown confirmation action.")
+        await send_message_async(wa_id, "unknown confirmation action.")
+
+
+async def _handle_calendar_reschedule_confirm(wa_id: str, data: str):
+    """Apply a calendar move only after the user confirms the proposal."""
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_calendar_reschedule_confirmation":
+        await send_message_async(wa_id, "this confirmation has expired. start again when ready.")
+        return
+
+    action = data.replace("calendar_reschedule_confirm_", "")
+    if action == "yes":
+        from bot.tools import calendar_reschedule
+
+        rd = ctx.get("calendar_reschedule_data", {})
+        result = await calendar_reschedule(
+            wa_id,
+            query=rd.get("query", ""),
+            new_start_time_iso=rd.get("new_start_time_iso", ""),
+            duration_minutes=rd.get("duration_minutes", 0),
+            _confirmed=True,
+        )
+        try:
+            payload = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
+            payload = {"action": "error", "message": str(result)}
+        if payload.get("action") == "calendar_rescheduled":
+            await clear_conversation_state(wa_id)
+        await send_message_async(wa_id, payload.get("message") or "couldn't reschedule that event.")
+    elif action == "edit":
+        await clear_conversation_state(wa_id)
+        await send_message_async(wa_id, "okay. send the event name and the new date and time.")
+    else:
+        await send_message_async(wa_id, "unknown confirmation action.")
 
 
 async def _handle_gmeet_contact_choice(wa_id: str, data: str):
     flow_state, ctx = await get_conversation_state(wa_id)
     if flow_state != "awaiting_gmeet_contact":
-        send_message(wa_id, "this contact selection has expired.")
+        await send_message_async(wa_id, "this contact selection has expired.")
         return
 
     try:
         idx = int(data.replace("gmeet_contact_", ""))
     except ValueError:
-        send_message(wa_id, "invalid contact selection.")
+        await send_message_async(wa_id, "invalid contact selection.")
         return
 
     contacts = ctx.get("contacts") or []
     if idx >= len(contacts):
-        send_message(wa_id, "invalid contact selection.")
+        await send_message_async(wa_id, "invalid contact selection.")
         return
     await _continue_gmeet_with_contact(wa_id, ctx, contacts[idx])
 
@@ -578,7 +744,7 @@ async def _continue_gmeet_with_contact(wa_id: str, ctx: dict, contact: dict):
 
     if not gd["attendee_email"]:
         await set_conversation_state(wa_id, "awaiting_gmeet_email", ctx)
-        send_message(wa_id, f"I found {gd['attendee_name']}, but that contact has no Gmail. Please send their Gmail.")
+        await send_message_async(wa_id, f"I found {gd['attendee_name']}, but that contact has no Gmail. Please send their Gmail.")
         return
 
     await _run_gmeet_from_context(wa_id, ctx)
@@ -609,7 +775,7 @@ async def _run_gmeet_from_context(wa_id: str, ctx: dict,
     try:
         data = json.loads(result)
     except (TypeError, json.JSONDecodeError):
-        send_message(wa_id, str(result))
+        await send_message_async(wa_id, str(result))
         await clear_conversation_state(wa_id)
         return
 
@@ -620,7 +786,7 @@ async def _handle_gmeet_tool_result(wa_id: str, data: dict):
     action = data.get("action")
     if action == "created":
         await clear_conversation_state(wa_id)
-        send_message(wa_id, data.get("message") or "google meet scheduled.")
+        await send_message_async(wa_id, data.get("message") or "google meet scheduled.")
     elif action == "awaiting_confirmation":
         await send_gmeet_confirm_buttons(wa_id, data)
     elif action == "conflict":
@@ -633,9 +799,9 @@ async def _handle_gmeet_tool_result(wa_id: str, data: dict):
         await send_gmeet_email_request(wa_id, data)
     elif action == "error":
         await clear_conversation_state(wa_id)
-        send_message(wa_id, data.get("message") or "couldn't schedule that meeting.")
+        await send_message_async(wa_id, data.get("message") or "couldn't schedule that meeting.")
     else:
-        send_message(wa_id, data.get("message") or "I need one more detail to schedule that meeting.")
+        await send_message_async(wa_id, data.get("message") or "I need one more detail to schedule that meeting.")
 
 
 async def send_gmeet_confirm_buttons(wa_id: str, data: dict):
@@ -649,11 +815,543 @@ async def send_gmeet_confirm_buttons(wa_id: str, data: dict):
         "gmeet_data": _gmeet_data_from_result(data),
     }
     await set_conversation_state(wa_id, "awaiting_gmeet_confirmation", ctx)
-    send_buttons(wa_id, data.get("message") or "save this meeting?", [
+    await send_buttons_async(wa_id, data.get("message") or "save this meeting?", [
         {"id": "gmeet_confirm_yes",  "title": "Confirm"},
         {"id": "gmeet_confirm_edit", "title": "Edit"},
         {"id": "cancel_flow",        "title": "Cancel"},
     ])
+
+
+async def send_calendar_reschedule_confirm_buttons(wa_id: str, data: dict):
+    """Persist a proposed move and make the deterministic callback the gate."""
+    ctx = {
+        "flow_kind": "calendar_reschedule",
+        "calendar_reschedule_data": {
+            "query": data.get("event_label") or "",
+            "new_start_time_iso": data.get("new_start_time_iso") or "",
+            "duration_minutes": data.get("duration_minutes") or 0,
+        },
+    }
+    await set_conversation_state(wa_id, "awaiting_calendar_reschedule_confirmation", ctx)
+    await send_buttons_async(wa_id, data.get("message") or "move this event?", [
+        {"id": "calendar_reschedule_confirm_yes", "title": "Confirm"},
+        {"id": "calendar_reschedule_confirm_edit", "title": "Edit"},
+        {"id": "cancel_flow", "title": "Cancel"},
+    ])
+
+
+# ═══════════════════════════════════════════════════════════════
+# Add-attendee to an existing event (deterministic, LLM out of the loop)
+# ═══════════════════════════════════════════════════════════════
+
+def _add_attendee_ctx(data: dict, **extra) -> dict:
+    ctx = {
+        "flow_kind": "add_attendee",
+        "add_attendee_data": {
+            "query": data.get("query") or data.get("event_label") or "",
+            "event_id": data.get("event_id") or "",
+            "event_label": data.get("event_label") or "",
+            "attendee_name": data.get("attendee_name") or "",
+            "attendee_email": data.get("attendee_email") or "",
+            "attendee_phone": data.get("attendee_phone") or "",
+        },
+    }
+    ctx.update(extra)
+    return ctx
+
+
+async def send_add_attendee_confirm_buttons(wa_id: str, data: dict):
+    """Final gate before a guest is actually written to the event."""
+    await set_conversation_state(
+        wa_id, "awaiting_add_attendee_confirmation", _add_attendee_ctx(data),
+    )
+    await send_buttons_async(wa_id, data.get("message") or "add this person to the event?", [
+        {"id": "add_attendee_confirm_yes", "title": "Confirm"},
+        {"id": "cancel_flow", "title": "Cancel"},
+    ])
+
+
+async def send_add_attendee_contact_picker(wa_id: str, data: dict):
+    """Several contacts match the NEW guest's name — let the user pick."""
+    contacts = data.get("contacts") or []
+    await set_conversation_state(
+        wa_id, "awaiting_add_attendee_contact",
+        _add_attendee_ctx(data, contacts=contacts),
+    )
+    rows = [
+        {
+            "id": f"add_attendee_contact_{i}",
+            "title": (c.get("name") or "Unknown")[:24],
+            "description": (c.get("email") or "No Gmail on this contact")[:72],
+        }
+        for i, c in enumerate(contacts[:10])
+    ]
+    if rows:
+        await send_list_async(
+            wa_id,
+            data.get("message") or "which one should i add?",
+            "Pick contact",
+            [{"title": "Matching contacts", "rows": rows}],
+        )
+    else:
+        await send_message_async(wa_id, data.get("message") or "send that person's gmail address.")
+
+
+async def send_add_attendee_event_picker(wa_id: str, data: dict):
+    """Ambiguous which existing event — never guess, always ask."""
+    events = data.get("events") or []
+    await set_conversation_state(
+        wa_id, "awaiting_add_attendee_event",
+        _add_attendee_ctx(data, events=events),
+    )
+    rows = [
+        {
+            "id": f"add_attendee_event_{i}",
+            "title": (ev.get("label") or "Event")[:24],
+            "description": (ev.get("label") or "")[:72],
+        }
+        for i, ev in enumerate(events[:10])
+    ]
+    if rows:
+        await send_list_async(
+            wa_id,
+            data.get("message") or "which event should i add them to?",
+            "Pick event",
+            [{"title": "Upcoming events", "rows": rows}],
+        )
+    else:
+        await send_message_async(wa_id, data.get("message") or "which event should i add them to?")
+
+
+async def send_add_attendee_email_request(wa_id: str, data: dict):
+    """We know the event, not the address. Ask for the email and NOTHING else."""
+    await set_conversation_state(
+        wa_id, "awaiting_add_attendee_email", _add_attendee_ctx(data),
+    )
+    await send_message_async(wa_id, data.get("message") or "send that person's gmail address.")
+
+
+async def _run_add_attendee_from_context(wa_id: str, ctx: dict, confirmed: bool = False):
+    """Re-run the tool with everything collected so far."""
+    from bot.tools import calendar_add_attendee
+
+    ad = ctx.get("add_attendee_data", {})
+    result = await calendar_add_attendee(
+        wa_id,
+        query=ad.get("query", ""),
+        attendee_name=ad.get("attendee_name", ""),
+        attendee_email=ad.get("attendee_email", ""),
+        _confirmed=confirmed,
+    )
+    try:
+        payload = json.loads(result)
+    except (TypeError, json.JSONDecodeError):
+        payload = {"action": "error", "message": str(result)}
+
+    action = payload.get("action")
+    if action == "awaiting_add_attendee_confirmation":
+        await send_add_attendee_confirm_buttons(wa_id, payload)
+        return
+    if action == "pick_contact_for_add":
+        await send_add_attendee_contact_picker(wa_id, payload)
+        return
+    if action == "choose_event_for_add":
+        await send_add_attendee_event_picker(wa_id, payload)
+        return
+    if action in ("need_attendee_email", "need_attendee"):
+        await send_add_attendee_email_request(wa_id, payload)
+        return
+
+    await clear_conversation_state(wa_id)
+    await send_message_async(wa_id, payload.get("message") or "couldn't add them to that event.")
+
+
+async def _handle_add_attendee_text_reply(wa_id: str, text: str, flow_state: str,
+                                          ctx: dict) -> bool:
+    """Typed replies during an add-attendee flow. True = handled."""
+    ad = ctx.get("add_attendee_data", {})
+    t = text.strip().lower()
+
+    if t in ("cancel", "stop", "no", "nevermind", "never mind"):
+        await clear_conversation_state(wa_id)
+        await send_message_async(wa_id, "okay, dropped it.")
+        return True
+
+    if flow_state == "awaiting_add_attendee_confirmation":
+        if t in ("yes", "y", "confirm", "ok", "okay", "yep", "add", "add them"):
+            await _run_add_attendee_from_context(wa_id, ctx, confirmed=True)
+            return True
+        # Changed their mind or asked something else → drop the gate.
+        await clear_conversation_state(wa_id)
+        return False
+
+    if flow_state in ("awaiting_add_attendee_email", "awaiting_add_attendee_contact"):
+        if flow_state == "awaiting_add_attendee_contact" and t.isdigit():
+            contacts = ctx.get("contacts") or []
+            idx = int(t) - 1
+            if 0 <= idx < len(contacts):
+                await _handle_add_attendee_contact_choice(
+                    wa_id, f"add_attendee_contact_{idx}",
+                )
+                return True
+        name, email = _extract_email(text, ad.get("attendee_name", ""))
+        if email:
+            ad["attendee_name"] = name or ad.get("attendee_name", "")
+            ad["attendee_email"] = email
+            ctx["add_attendee_data"] = ad
+            await _run_add_attendee_from_context(wa_id, ctx)
+            return True
+        await send_message_async(wa_id, "send a valid gmail, e.g. name@example.com.")
+        return True
+
+    if flow_state == "awaiting_add_attendee_event":
+        if t.isdigit():
+            events = ctx.get("events") or []
+            idx = int(t) - 1
+            if 0 <= idx < len(events):
+                await _handle_add_attendee_event_choice(
+                    wa_id, f"add_attendee_event_{idx}",
+                )
+                return True
+        # Treat free text as a fresh event query rather than re-asking.
+        ad["query"] = text.strip()
+        ctx["add_attendee_data"] = ad
+        await _run_add_attendee_from_context(wa_id, ctx)
+        return True
+
+    return False
+
+
+async def _handle_add_attendee_confirm(wa_id: str, data: str):
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_add_attendee_confirmation":
+        await send_message_async(wa_id, "this confirmation has expired. start again when ready.")
+        return
+    await _run_add_attendee_from_context(wa_id, ctx, confirmed=True)
+
+
+async def _handle_add_attendee_contact_choice(wa_id: str, data: str):
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_add_attendee_contact":
+        await send_message_async(wa_id, "this contact selection has expired.")
+        return
+    try:
+        idx = int(data.replace("add_attendee_contact_", ""))
+    except ValueError:
+        await send_message_async(wa_id, "invalid contact selection.")
+        return
+    contacts = ctx.get("contacts") or []
+    if idx >= len(contacts):
+        await send_message_async(wa_id, "invalid contact selection.")
+        return
+
+    contact = contacts[idx]
+    ad = ctx.get("add_attendee_data", {})
+    ad["attendee_name"] = contact.get("name") or ad.get("attendee_name", "")
+    ad["attendee_email"] = contact.get("email") or ""
+    ad["attendee_phone"] = contact.get("phone") or ""
+    ctx["add_attendee_data"] = ad
+
+    if not ad["attendee_email"]:
+        await set_conversation_state(wa_id, "awaiting_add_attendee_email", ctx)
+        await send_message_async(wa_id, f"{ad['attendee_name']} has no gmail on file. send their gmail.")
+        return
+    await _run_add_attendee_from_context(wa_id, ctx)
+
+
+async def _handle_add_attendee_event_choice(wa_id: str, data: str):
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_add_attendee_event":
+        await send_message_async(wa_id, "this event selection has expired.")
+        return
+    try:
+        idx = int(data.replace("add_attendee_event_", ""))
+    except ValueError:
+        await send_message_async(wa_id, "invalid event selection.")
+        return
+    events = ctx.get("events") or []
+    if idx >= len(events):
+        await send_message_async(wa_id, "invalid event selection.")
+        return
+
+    ad = ctx.get("add_attendee_data", {})
+    # The label is what the matcher scores against, so a picked event
+    # re-resolves to exactly one candidate on the next pass.
+    ad["query"] = events[idx].get("label") or ad.get("query", "")
+    ctx["add_attendee_data"] = ad
+    await _run_add_attendee_from_context(wa_id, ctx)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Post-meeting summaries — card, picker, and ticket actions
+#
+# The pull path for transcripts. `get_meeting_summaries` (tools.py) finds a
+# stored summary; everything the user sees below is deterministic. The LLM
+# never narrates a summary and never creates tickets from one — buttons do.
+# ═══════════════════════════════════════════════════════════════
+
+_MAX_TICKET_ITEMS = 5      # never create more than this many todos/reminders
+
+
+def _mtg_ctx(data: dict) -> dict:
+    """Conversation-state context for an active summary card."""
+    return {"flow_kind": "mtg_summary", "mtg_data": data}
+
+
+def _action_items_of(data: dict) -> list[dict]:
+    items = [a for a in (data.get("action_items") or [])
+             if isinstance(a, dict) and (a.get("task") or "").strip()]
+    return items[:_MAX_TICKET_ITEMS]
+
+
+def _render_summary_text(data: dict) -> str:
+    """MeetingSummary payload → WhatsApp text (plain, no markdown tables)."""
+    lines: list[str] = []
+    title = (data.get("title") or "").strip()
+    headline = (data.get("headline") or "").strip()
+    if title and headline:
+        lines.append(f"*{title}* — {headline}")
+    elif title or headline:
+        lines.append(f"*{title or headline}*")
+    prov = data.get("provider_label") or ""
+    when = data.get("when_label") or ""
+    meta = " · ".join(x for x in (prov, when.split("— ", 1)[-1]) if x)
+    if meta:
+        lines.append(meta)
+    if data.get("key_takeaways"):
+        lines.append("\n*Takeaways*")
+        lines += [f"• {t}" for t in data["key_takeaways"]]
+    if data.get("decisions"):
+        lines.append("\n*Decisions*")
+        for d in data["decisions"]:
+            who = f" — {d.get('decided_by')}" if d.get("decided_by") else ""
+            lines.append(f"• {d.get('decision', '')}{who}")
+    items = data.get("action_items") or []
+    if items:
+        lines.append("\n*Action items*")
+        for a in items:
+            owner = a.get("owner") or "unassigned"
+            due = f" ({a['due']})" if a.get("due") else ""
+            lines.append(f"• {a.get('task', '')} — {owner}{due}")
+    if data.get("per_person"):
+        lines.append("\n*Who said what*")
+        for p in data["per_person"]:
+            name = p.get("name") or p.get("display_name") or "?"
+            lines.append(f"• {name}: {p.get('summary', '')}")
+    return "\n".join(lines).strip() or "summary unavailable."
+
+
+async def send_meeting_summary_card(wa_id: str, data: dict) -> bool:
+    """Render one meeting summary + action buttons.
+
+    Used by BOTH paths: the agent's pull path (via main.py's dispatcher) and
+    the poller's push path (pipeline.py after a transcript lands). Returns
+    True when the summary text went out.
+
+    Never steals an active conversation slot: if the user is mid-booking,
+    the summary is still delivered but the action buttons are skipped —
+    their tap would otherwise clobber the booking state machine.
+    """
+    ok = await send_message_async(wa_id, _render_summary_text(data))
+
+    items = _action_items_of(data)
+    if not items:
+        # Only clear OUR slot — never a booking flow the user is mid-way
+        # through (the poller can deliver a summary at any moment).
+        state, mctx = await get_conversation_state(wa_id)
+        if not state or (mctx or {}).get("flow_kind") == "mtg_summary":
+            await clear_conversation_state(wa_id)
+        return bool(ok)
+
+    state, _ = await get_conversation_state(wa_id)
+    if not state:
+        await set_conversation_state(wa_id, "awaiting_mtg_action", _mtg_ctx(data))
+        await send_buttons_async(
+            wa_id,
+            f"{len(items)} action item(s) above — want them as todos or reminders?",
+            [
+                {"id": "mtg_todos_add", "title": "Add as todos"},
+                {"id": "mtg_remind_set", "title": "Set reminders"},
+            ],
+        )
+    return bool(ok)
+
+
+async def send_meeting_summary_picker(wa_id: str, data: dict):
+    """Several meetings match — list them, never guess."""
+    summaries = [s for s in (data.get("summaries") or [])
+                 if isinstance(s, dict)][:10]
+    await set_conversation_state(wa_id, "awaiting_mtg_pick", {
+        "flow_kind": "mtg_summary",
+        "summaries": summaries,
+    })
+    rows = [
+        {
+            "id": f"mtgsummary_{i}",
+            "title": (s.get("title") or s.get("headline")
+                      or "Meeting")[:24],
+            "description": (s.get("when_label")
+                            or s.get("headline") or "")[:72],
+        }
+        for i, s in enumerate(summaries)
+    ]
+    if rows:
+        await send_list_async(
+            wa_id,
+            data.get("message") or "which meeting do you mean?",
+            "Pick meeting",
+            [{"title": "Recent meetings", "rows": rows}],
+        )
+    else:
+        await send_message_async(
+            wa_id, data.get("message") or "which meeting do you mean?",
+        )
+
+
+async def _handle_mtgsummary_choice(wa_id: str, reply_id: str):
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_mtg_pick":
+        await send_message_async(wa_id, "this selection has expired.")
+        return
+    try:
+        idx = int(reply_id.replace("mtgsummary_", ""))
+    except ValueError:
+        await send_message_async(wa_id, "invalid selection.")
+        return
+    summaries = ctx.get("summaries") or []
+    if idx >= len(summaries):
+        await send_message_async(wa_id, "invalid selection.")
+        return
+    chosen = summaries[idx]
+    await clear_conversation_state(wa_id)
+    await send_meeting_summary_card(wa_id, chosen)
+
+
+async def _handle_mtg_todos_add(wa_id: str):
+    """Turn the card's action items into real to-do rows (one sheet append)."""
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_mtg_action":
+        await send_message_async(wa_id, "this action has expired.")
+        return
+    items = _action_items_of(ctx.get("mtg_data") or {})
+    await clear_conversation_state(wa_id)
+
+    from bot.database import User
+    from bot.services.sheets import add_todo_to_sheet
+    async with async_session() as session:
+        u = (await session.execute(
+            select(User).where(User.wa_id == wa_id)
+        )).scalar_one_or_none()
+    if not u or not u.google_token_json:
+        await send_message_async(wa_id, "connect your google account first — "
+                                 "tap connect above or type 'connect'.")
+        return
+
+    tasks = [(a.get("task") or "").strip() for a in items]
+    result = add_todo_to_sheet(u, tasks)
+    if hasattr(result, "__await__"):
+        result = await result
+    if "error" in result:
+        await send_message_async(wa_id, "couldn't reach your to-do sheet — "
+                                 "try again in a bit.")
+        return
+    added = result.get("added", len(tasks))
+    listing = "\n".join(f"• {t}" for t in tasks)
+    await send_message_async(
+        wa_id, f"done — added {added} to your to-do list:\n{listing}",
+    )
+
+
+async def _handle_mtg_remind_set(wa_id: str):
+    """Reminders need a TIME from the user — same anti-hallucination rule
+    as every other reminder. Ask; never invent one from the transcript."""
+    flow_state, ctx = await get_conversation_state(wa_id)
+    if flow_state != "awaiting_mtg_action":
+        await send_message_async(wa_id, "this action has expired.")
+        return
+    n = len(_action_items_of(ctx.get("mtg_data") or {}))
+    await set_conversation_state(wa_id, "awaiting_mtg_reminder_time", ctx)
+    await send_message_async(
+        wa_id,
+        f"sure — what time should i remind you about "
+        f"{'that item' if n == 1 else f'all {n} items'}? (e.g. tomorrow 9 am)",
+    )
+
+
+async def _handle_mtg_summary_text_reply(wa_id: str, text: str,
+                                         flow_state: str, ctx: dict) -> bool:
+    """Typed replies during the summary flow. True = handled."""
+    t = text.strip().lower()
+
+    if flow_state == "awaiting_mtg_action":
+        if t in ("cancel", "stop", "no", "close", "dismiss",
+                 "nevermind", "never mind"):
+            await clear_conversation_state(wa_id)
+            return True
+        if any(k in t for k in ("todo", "to-do", "task")):
+            await _handle_mtg_todos_add(wa_id)
+            return True
+        if any(k in t for k in ("remind", "reminder")):
+            await _handle_mtg_remind_set(wa_id)
+            return True
+        # Anything else leaves the gate open for the agent to handle normally.
+        await clear_conversation_state(wa_id)
+        return False
+
+    if flow_state == "awaiting_mtg_reminder_time":
+        if t in ("cancel", "stop", "no", "nevermind", "never mind"):
+            await clear_conversation_state(wa_id)
+            await send_message_async(wa_id, "okay, skipped the reminders.")
+            return True
+        parsed = await parse_datetime_from_text(text)
+        iso = (parsed or {}).get("date_iso") or ""
+        if not iso:
+            await send_message_async(
+                wa_id, "i need a clock time — e.g. 'tomorrow 9 am' or 'today 6 pm'.",
+            )
+            return True
+
+        data = ctx.get("mtg_data") or {}
+        title = (data.get("title") or data.get("headline") or "").strip()
+        items = _action_items_of(data)
+        from bot.tools import set_reminder
+        created, failed = [], []
+        for a in items:
+            msg_text = a.get("task", "").strip()
+            if title:
+                msg_text = f"{msg_text} (from {title})"
+            result = await set_reminder(
+                wa_id, message=msg_text, remind_at_iso=iso, user_text=text,
+            )
+            low = result.lower()
+            if low.startswith("reminder #") or "daily reminder #" in low:
+                created.append(a.get("task", ""))
+            else:
+                failed.append(result if not low.startswith("time_required")
+                              else "TIME_REQUIRED")
+
+        await clear_conversation_state(wa_id)
+        if "TIME_REQUIRED" in failed:
+            await set_conversation_state(
+                wa_id, "awaiting_mtg_reminder_time", ctx)
+            await send_message_async(
+                wa_id, "that needs a clock time (like '9 am') so i don't "
+                "guess — what time works?")
+            return True
+        if created:
+            listing = "\n".join(f"• {c}" for c in created)
+            extra = (f"\n{len(failed)} couldn't be set." if failed else "")
+            await send_message_async(
+                wa_id,
+                f"done — {len(created)} reminder"
+                f"{'s' if len(created) != 1 else ''} set:\n{listing}{extra}",
+            )
+        else:
+            await send_message_async(
+                wa_id, "couldn't set those reminders — try again?")
+        return True
+
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -663,7 +1361,7 @@ async def send_gmeet_confirm_buttons(wa_id: str, data: dict):
 async def _handle_conflict(wa_id: str, data: str):
     flow_state, ctx = await get_conversation_state(wa_id)
     if flow_state != "awaiting_conflict_resolution":
-        send_message(wa_id, "this action has expired.")
+        await send_message_async(wa_id, "this action has expired.")
         return
 
     action = data.replace("conflict_", "")
@@ -675,39 +1373,11 @@ async def _handle_conflict(wa_id: str, data: str):
         await _run_gmeet_from_context(wa_id, ctx, skip_conflict_check=True)
     elif action in ("move_later", "move_earlier", "reschedule_existing"):
         await set_conversation_state(wa_id, "awaiting_gmeet_time", ctx)
-        send_message(
+        await send_message_async(
             wa_id,
             "sure — what new date and time should i use for this google meet? "
             "(e.g. tomorrow 2 pm)",
         )
-
-
-# ═══════════════════════════════════════════════════════════════
-# Completion Check
-# ═══════════════════════════════════════════════════════════════
-
-async def _handle_completion(wa_id: str, data: str):
-    parts = data.split("_")
-    if len(parts) < 3:
-        send_message(wa_id, "invalid action.")
-        return
-    action = parts[1]
-    try:
-        task_id = int(parts[2])
-    except (ValueError, IndexError):
-        send_message(wa_id, "invalid task reference.")
-        return
-
-    if action == "done":
-        ok = await complete_task(task_id)
-        send_message(wa_id, "marked as done. nice." if ok else "couldn't mark that as done.")
-    elif action == "reschedule":
-        send_message(
-            wa_id,
-            "when would you like to reschedule? send the new date and time.\n"
-            "for example: \"thursday 3 pm\" or \"tomorrow 10 am\"",
-        )
-        await set_conversation_state(wa_id, "awaiting_reschedule_time", {"task_id": task_id})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -720,7 +1390,7 @@ async def _handle_cancel(wa_id: str):
     if task_id:
         await cancel_task(task_id)
     await clear_conversation_state(wa_id)
-    send_message(wa_id, "cancelled.")
+    await send_message_async(wa_id, "cancelled.")
 
 
 async def _handle_onboarding(wa_id: str, data: str):
@@ -745,17 +1415,9 @@ async def _handle_onboarding(wa_id: str, data: str):
 # Keyboard Builders (used by main.py)
 # ═══════════════════════════════════════════════════════════════
 
-def send_completion_buttons(wa_id: str, task_id: int, message: str):
-    """Send done/reschedule buttons for a completion check."""
-    send_buttons(wa_id, message, [
-        {"id": f"task_done_{task_id}",       "title": "Done"},
-        {"id": f"task_reschedule_{task_id}", "title": "Reschedule"},
-    ])
-
-
-def send_connect_button(wa_id: str, message: str):
+async def send_connect_button(wa_id: str, message: str):
     """Send a 'Connect Google' button with a context message."""
-    send_buttons(wa_id, message, [
+    await send_buttons_async(wa_id, message, [
         {"id": "connect_google",    "title": "Connect Google"},
         {"id": "show_capabilities", "title": "What can I do?"},
     ])
@@ -763,7 +1425,7 @@ def send_connect_button(wa_id: str, message: str):
 
 async def _send_capabilities(wa_id: str):
     """Send a capabilities overview."""
-    send_message(
+    await send_message_async(
         wa_id,
         "here's what i can do:\n\n"
         "*calendar* — create, view, update and delete events\n"

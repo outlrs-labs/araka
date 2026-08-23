@@ -26,6 +26,33 @@ python -m tester.run
 
 Exit code is 0 if every scenario passes, 1 otherwise.
 
+## The blind spot this suite has — and the second harness that covers it
+
+The LLM here is a **deterministic mock**: it always emits the correct tool
+call. That makes this suite fast, free and CI-safe, and it genuinely proves
+the plumbing — routing, state machines, confirmation gates, DB writes.
+
+What it can **never** catch is the model itself misbehaving: picking the wrong
+tool, repeating a question it already asked, naming a person nobody mentioned,
+or claiming something was booked when it wasn't. A production hallucination
+loop shipped past a fully green run for exactly that reason.
+
+For that, use the real-model eval:
+
+```bash
+python -m tester.prompt_eval          # 1 sample per case
+python -m tester.prompt_eval -n 3     # 3 samples — surfaces flakiness
+python -m tester.prompt_eval -k add_guest
+```
+
+It replays real transcripts against live Sarvam using the **production system
+prompt and production tool-selection logic**, then scores the reply. It needs
+`SARVAM_API_KEY`, costs API calls, and is non-deterministic — so it is
+deliberately **not** part of `tester/run.py` and must not gate CI. Run it
+before shipping any change to `SYSTEM_PROMPT`, the tool declarations, or
+`_select_tools_for_text`. A `~ FLAKY` result is real signal: the behaviour
+isn't reliable even at temperature 0.1.
+
 ## Scenarios
 
 | Script | PRD | What it proves |
@@ -37,14 +64,20 @@ Exit code is 0 if every scenario passes, 1 otherwise.
 | A.5 Completion | FR-10 | end+1h → Done/Reschedule → marks completed |
 | FR-8 STOP | FR-8/§12 | STOP → OPT_OUT + assignee_unreachable; START re-enables |
 | FR-9 Reminders | FR-9 | T-24h reminder to creator (free-form) AND assignee (template); opt-out suppresses |
+| Add guest to existing meet | — | "add X to this meet" adds a guest behind a confirm gate; never asks for a title/time the event already has |
+| Add guest never re-asks | — | The bot must not repeat its own question; a bare "hi" must not resurrect a stale one |
+| Add guest picks the event | — | Two candidate events → picker, never a silent guess |
+| Tool routing matrix | — | Which tools each phrasing exposes; also that "remove X from the meeting" never exposes `calendar_cancel` |
+| Empty reply isn't success | — | An empty model completion must not be reported as "done." |
 
 ## Files
 
 - `__init__.py` — sets the isolated DB + dummy env (must import first)
 - `harness.py` — `Simulator`, mock installation, personas, DB helpers
-- `llm_mock.py` — deterministic stand-in for the Groq model
+- `llm_mock.py` — deterministic stand-in for the chat model
 - `scenarios.py` — the user scripts + assertions
 - `run.py` — runner with a pass/fail table
+- `prompt_eval.py` — real-model eval (opt-in, needs an API key; see above)
 
 ## Adding a scenario
 

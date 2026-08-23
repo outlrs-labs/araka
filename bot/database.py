@@ -39,6 +39,15 @@ if config.DATABASE_URL.startswith("sqlite"):
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute(f"PRAGMA busy_timeout={config.SQLITE_BUSY_TIMEOUT_MS}")
         cursor.execute("PRAGMA foreign_keys=ON")
+        # ── Latency tuning (safe with WAL) ──────────────────────
+        # synchronous=NORMAL: one fewer fsync per commit. Durable on app
+        #   crash; only a power-loss/OS-crash could lose the last txn — an
+        #   acceptable trade for a scheduling bot, and the standard WAL setting.
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        # 64 MB page cache → fewer disk reads on hot queries.
+        cursor.execute("PRAGMA cache_size=-64000")
+        # Temp B-trees / sorts in RAM instead of on disk.
+        cursor.execute("PRAGMA temp_store=MEMORY")
         cursor.close()
 
 
@@ -89,7 +98,9 @@ class Note(Base):
     __tablename__ = "notes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Indexed because the agent counts a user's notes on EVERY inbound message
+    # (the live-state footer); unindexed this was a full table scan per message.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     text = Column(Text, nullable=False)
     detected_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
@@ -106,6 +117,27 @@ class ChatMemory(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class ContactCache(Base):
+    """Per-user Google contact cache (cache-aside speed layer).
+
+    Source of truth stays Google (People API / Gmail otherContacts). Rows
+    here are a TTL-bound copy so contact lookups cost <1ms instead of an
+    ~500ms API round-trip. email/phone are Fernet-encrypted at rest (same
+    key as Google tokens); only name/email/phone are stored — nothing else.
+    Wiped on 'delete my data', on Google disconnect, and on 'refresh contacts'.
+    """
+    __tablename__ = "contacts_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    name_lower = Column(String(120), index=True)     # lowercase, for LIKE search
+    email = Column(Text)                             # Fernet-encrypted, comma-joined
+    phone = Column(Text)                             # Fernet-encrypted, comma-joined
+    source = Column(String(20), default="contacts")  # contacts | gmail
+    synced_at = Column(DateTime, default=_utcnow)
+
+
 class WebhookMessage(Base):
     """Durable idempotency record for inbound WhatsApp messages."""
     __tablename__ = "webhook_messages"
@@ -114,6 +146,35 @@ class WebhookMessage(Base):
     message_id = Column(String(255), unique=True, nullable=False, index=True)
     wa_id = Column(String(50), nullable=False, index=True)
     received_at = Column(DateTime, default=_utcnow, index=True)
+
+
+class MeetingSummary(Base):
+    """A fetched transcript, summarised — one row per meeting.
+
+    Exists so the transcript poller is idempotent: a meeting that already has
+    a row is never fetched or summarised twice, however often the job runs.
+    `delivered` separates "we have the summary" from "the user has seen it",
+    so a WhatsApp send failure retries the send without paying for the LLM
+    call again.
+
+    Created automatically by `create_all` on first boot — new TABLES need no
+    migration entry, unlike new columns.
+    """
+    __tablename__ = "meeting_summaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    wa_id = Column(String(50), nullable=False, index=True)
+    task_id = Column(Integer, index=True)          # FK to tasks.id (soft)
+    provider = Column(String(20), default="google_meet")
+    conference_id = Column(String(255), index=True)
+    # Full MeetingSummary dataclass as JSON — keeps the per-speaker detail
+    # even though the WhatsApp message only shows a condensed version.
+    summary_json = Column(Text)
+    delivered = Column(Boolean, default=False)
+    # Set when a transcript will never exist (wrong account tier, recording
+    # off). Stops the poller retrying that meeting forever.
+    unavailable_reason = Column(String(255))
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class Reminder(Base):
@@ -132,9 +193,14 @@ class Reminder(Base):
 
 
 class Task(Base):
-    """Commitment with 6-state machine.
+    """A booked meeting, kept so conflict detection can see it.
 
-    States: draft → scheduled → completed / rescheduled / cancelled / unconfirmed
+    States: scheduled → completed / cancelled.
+
+    Several columns here are vestigial: they belonged to the completion-check
+    and automatic T-24h/T-1h reminder features, both removed. They are left in
+    place because dropping a column in SQLite means rebuilding the table, and
+    nothing reads them any more.
     """
     __tablename__ = "tasks"
 
@@ -234,8 +300,17 @@ _MIGRATIONS = {
 }
 
 
+# Indexes for tables that already exist. `create_all` only builds indexes when
+# it creates the table, so a column that gains index=True later never gets one
+# on a live database — which is how the per-message notes count stayed a full
+# table scan in production.
+_INDEX_MIGRATIONS = [
+    ("ix_notes_user_id", "notes", "user_id"),
+]
+
+
 def _sync_migrate(conn):
-    """Add any missing columns to existing tables (SQLite-safe)."""
+    """Add any missing columns and indexes to existing tables (SQLite-safe)."""
     inspector = sa_inspect(conn)
     existing_tables = set(inspector.get_table_names())
     for table, columns in _MIGRATIONS.items():
@@ -247,6 +322,15 @@ def _sync_migrate(conn):
                 conn.execute(sql_text(
                     f"ALTER TABLE {table} ADD COLUMN {col_name} {ddl}"
                 ))
+
+    for index_name, table, column in _INDEX_MIGRATIONS:
+        if table not in existing_tables:
+            continue
+        have = {i["name"] for i in inspector.get_indexes(table)}
+        if index_name not in have:
+            conn.execute(sql_text(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+            ))
 
 
 async def init_db():

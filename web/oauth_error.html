@@ -1,31 +1,122 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Connection failed — FollowUp Bot</title>
-<style>
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-         background:linear-gradient(160deg,#fdecea,#f7faf9); color:#1f2d3d; }
-  .card { background:#fff; border-radius:20px; padding:44px 36px; max-width:440px; text-align:center;
-          box-shadow:0 12px 40px rgba(176,0,32,.10); margin:20px; }
-  .x { width:76px; height:76px; border-radius:50%; background:#e74c3c; color:#fff; font-size:40px;
-       display:flex; align-items:center; justify-content:center; margin:0 auto 18px; }
-  h1 { margin:0 0 8px; font-size:24px; }
-  p { color:#6b7c93; margin:6px 0; }
-  .err { background:#fbeae8; color:#a02; border-radius:8px; padding:10px 12px; font-size:13px;
-         margin:16px 0; word-break:break-word; }
-  .hint { margin-top:18px; font-size:14px; color:#075E54; font-weight:600; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connection Failed — Araka</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a0a;
+      color: #e8e6e3;
+      overflow: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 50%, rgba(239, 68, 68, 0.05) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .card {
+      position: relative;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 52px 40px;
+      max-width: 460px;
+      width: 90%;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      animation: card-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(24px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .x-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: #ef4444;
+      color: #fff;
+      font-size: 32px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      box-shadow: 0 0 40px rgba(239, 68, 68, 0.2);
+      animation: pop 0.5s 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes pop {
+      from { transform: scale(0); }
+      to { transform: scale(1); }
+    }
+    h1 {
+      font-family: "Outfit", "Inter", sans-serif;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 10px;
+      color: #fff;
+    }
+    p {
+      color: rgba(232, 230, 227, 0.6);
+      font-size: 0.92rem;
+      line-height: 1.55;
+      margin: 6px 0;
+    }
+    .err {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.15);
+      color: #fca5a5;
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-size: 0.82rem;
+      margin: 20px 0;
+      word-break: break-word;
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+      line-height: 1.5;
+    }
+    .hint {
+      margin-top: 24px;
+      font-size: 0.85rem;
+      color: #25D366;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    .brand {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: "Outfit", "Inter", sans-serif;
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: rgba(255,255,255,0.25);
+    }
+  </style>
 </head>
 <body>
   <div class="card">
-    <div class="x">!</div>
-    <h1>Couldn’t connect</h1>
+    <div class="brand">araka</div>
+    <div class="x-icon">!</div>
+    <h1>Couldn't connect</h1>
     <p>The authorization link may have expired or was cancelled.</p>
     <div class="err">{{ERROR}}</div>
-    <p class="hint">Go back to WhatsApp and tap “🔗 Connect Google” again.</p>
+    <p class="hint">Go back to WhatsApp and tap "🔗 Connect Google" again ↗</p>
   </div>
 </body>
 </html>

@@ -12,7 +12,7 @@ import asyncio
 import sys
 import traceback
 
-from tester.harness import Simulator, install_mocks, setup_db
+from tester.harness import Simulator, install_mocks, setup_db, reset_rate_limit
 from tester import scenarios
 
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
@@ -25,6 +25,10 @@ async def _run() -> bool:
 
     results = []
     for name, fn in scenarios.ALL:
+        # Scenarios share one wa_id, so without this the per-user rate limit
+        # accumulates across the suite and later scenarios get throttled —
+        # a test-isolation artifact, not a product failure.
+        reset_rate_limit()
         try:
             await fn(sim)
             results.append((name, True, ""))

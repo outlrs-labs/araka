@@ -4,10 +4,21 @@ credentials.json
 _credentials_desktop.json
 token_*.json
 *.pickle
+*.key
+# RSA keypair for WhatsApp Flow encryption — setup/generate_flow_keys.py
+# writes these into the repo, and there was no rule stopping them being
+# committed. A private key in git history cannot be un-published.
+*.pem
+SSH Key Jun 10 2026.key
 
 # Database
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+
+# Editor workspace state — not project content
+.obsidian/
 
 # Python
 __pycache__/

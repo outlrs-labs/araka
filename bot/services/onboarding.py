@@ -30,7 +30,9 @@ import pytz
 from sqlalchemy import select
 
 from bot.database import async_session, User
-from bot.services.whatsapp import send_message, send_buttons
+from bot.services.whatsapp import (
+    send_message, send_message_async, send_buttons, send_buttons_async,
+)
 from bot.utils.time import utcnow_naive
 
 logger = logging.getLogger(__name__)
@@ -68,10 +70,11 @@ def send_consent_screen(wa_id: str) -> None:
     send_buttons(
         wa_id,
         "one last thing, so we're fully upfront:\n\n"
-        "connecting google lets me use your *calendar, meet and contacts* "
-        "(and read gmail only when you ask about an email). i touch only what "
-        "you ask me to schedule, never sell your data, and you can say "
-        "*delete my data* anytime.\n\n"
+        "connecting google lets me use your *calendar, meet and contacts*, "
+        "read gmail only when you ask about an email, and *send an email when "
+        "you fill in the email form yourself* (i never read or write what you "
+        "type). i touch only what you ask me to, never sell your data, and you "
+        "can say *delete my data* anytime.\n\n"
         "by tapping *Connect Google* you agree to araka's terms & privacy "
         "policy — tap to read them first.",
         _consent_buttons(),
@@ -93,27 +96,33 @@ async def send_terms(wa_id: str) -> None:
     )
     if TERMS_URL:
         body += f"\n\nfull terms: {TERMS_URL}"
-    send_message(wa_id, body)
-    send_buttons(wa_id, "all good? you can read the privacy notice too, or connect.",
+    await send_message_async(wa_id, body)
+    await send_buttons_async(wa_id, "all good? you can read the privacy notice too, or connect.",
                  _consent_buttons())
 
 
 async def send_privacy(wa_id: str) -> None:
     """Short Privacy summary + full link, then re-offer the consent buttons."""
-    send_message(
+    await send_message_async(
         wa_id,
         "*privacy (short version)*\n\n"
         "- i store only what you ask me to schedule (meetings, reminders, "
         "notes) plus your name and timezone.\n"
         "- google data (calendar, contacts, gmail) is used only to help you, "
         "*never sold and never used to train ai*.\n"
+        "- contact names/emails you look up are kept in an encrypted cache "
+        "for speed (7 days); say *refresh contacts* to re-sync or *delete my "
+        "data* to wipe it.\n"
+        "- i can *send* an email only from the form you fill in yourself — the "
+        "subject and message go straight to gmail, i never read or change them, "
+        "and i don't store a copy.\n"
         "- i message people you book with via an approved template; they can "
         "reply *STOP*.\n"
         "- say *delete my data* anytime to erase everything; *disconnect* to "
         "unlink google."
         f"\n\nfull notice: {PRIVACY_URL}",
     )
-    send_buttons(wa_id, "all good? you can read the terms too, or connect.",
+    await send_buttons_async(wa_id, "all good? you can read the terms too, or connect.",
                  _consent_buttons())
 
 
@@ -155,7 +164,7 @@ async def ensure_user(wa_id: str) -> Tuple[User, bool]:
 async def start_onboarding(wa_id: str) -> None:
     """Send the welcome + privacy notice + WhatsApp-number confirmation."""
     await _set_step(wa_id, STEP_WA)
-    send_message(
+    await send_message_async(
         wa_id,
         "look who went official\n\n"
         "meta makes me say this before we start, so here: i'm an automated "
@@ -166,7 +175,7 @@ async def start_onboarding(wa_id: str) -> None:
         "from now on. say \"unsubscribe\" anytime if it gets too much\n\n"
         "what's good?\n\n" + _privacy_line(),
     )
-    send_buttons(
+    await send_buttons_async(
         wa_id,
         f"quick check — is *{_pretty_number(wa_id)}* the right number for you?",
         [
@@ -194,7 +203,7 @@ async def confirm_whatsapp(wa_id: str) -> None:
             u.consent_given_at = utcnow_naive()
             u.onboarding_step = STEP_NAME
             await session.commit()
-    send_message(
+    await send_message_async(
         wa_id,
         "noted. what should i call you? first name is fine.",
     )
@@ -202,7 +211,7 @@ async def confirm_whatsapp(wa_id: str) -> None:
 
 async def reject_whatsapp(wa_id: str) -> None:
     """v1 always uses the WhatsApp number the user is messaging from."""
-    send_buttons(
+    await send_buttons_async(
         wa_id,
         "for now i work on the number you're texting me from — let's use "
         "this one. sound good?",
@@ -218,7 +227,7 @@ async def confirm_timezone(wa_id: str) -> None:
 
 
 async def change_timezone_prompt(wa_id: str) -> None:
-    send_message(
+    await send_message_async(
         wa_id,
         "no problem — type your timezone in IANA form, e.g. "
         "*America/New_York*, *Europe/London*, or *Asia/Dubai*.",
@@ -239,7 +248,7 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
 
     # Let users read the privacy notice at any onboarding step.
     if text.lower() == "privacy":
-        send_message(
+        await send_message_async(
             wa_id,
             "*privacy*\n\n"
             "- i store only the meetings and reminders you ask me to create\n"
@@ -258,13 +267,13 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
         step = u.onboarding_step if u else None
 
     if step == STEP_WA:
-        send_message(wa_id, "tap one of the buttons above to continue")
+        await send_message_async(wa_id, "tap one of the buttons above to continue")
         return True
 
     if step == STEP_NAME:
         name = text[:_MAX_NAME].strip()
         if len(name) < 1:
-            send_message(wa_id, "didn't catch a name — what should i call you?")
+            await send_message_async(wa_id, "didn't catch a name — what should i call you?")
             return True
         async with async_session() as session:
             u = (await session.execute(
@@ -275,7 +284,7 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
                 u.first_name = name.split()[0]
                 u.onboarding_step = STEP_TZ
                 await session.commit()
-        send_buttons(
+        await send_buttons_async(
             wa_id,
             f"nice to meet you, {name}.\n\n"
             "last step — i'll use *India Standard Time (IST)* for your "
@@ -290,7 +299,7 @@ async def handle_onboarding_message(wa_id: str, text: str) -> bool:
     if step == STEP_TZ:
         tz_name = _coerce_timezone(text)
         if not tz_name:
-            send_message(
+            await send_message_async(
                 wa_id,
                 "i don't recognise that timezone. try an IANA name like "
                 "*Asia/Kolkata* or *America/New_York* — or tap *Yes, use IST*.",
@@ -321,7 +330,7 @@ async def _set_timezone_and_finish(wa_id: str, tz_name: str) -> None:
             await session.commit()
 
     nice_tz = "IST" if tz_name == "Asia/Kolkata" else tz_name
-    send_message(wa_id, f"all set. timezone: *{nice_tz}*.")
+    await send_message_async(wa_id, f"all set. timezone: *{nice_tz}*.")
     # Transparent consent step: Terms / Privacy / Connect Google.
     send_consent_screen(wa_id)
 
